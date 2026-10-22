@@ -255,6 +255,22 @@ class Rig:
                 if not ids:continue
                 self.accessories.append((entry['side'],entry['kind'],ids,entry))
                 (self.brows if entry['kind']=='BROW' else self.creases).update(ids)
+        # Older automatic guides classified a low parallel eyelid strip as
+        # another brow. Require a separate higher brow before correcting it;
+        # explicit manual labels remain authoritative.
+        corrected=[]
+        for side,kind,ids,entry in self.accessories:
+            ring=self.rings.get(side);width=self.widths.get(('EYE',side),0.)
+            if kind=='BROW' and ring is not None and not entry.get('manual'):
+                center=self.points[ids].mean(0);u=ring.locate(Vector(center),True)[0]
+                offset=center[2]-ring.sample(u,True).z
+                higher=any(s==side and k=='BROW' and self.points[other,2].mean()>center[2]+width*.20
+                           for s,k,other,e in self.accessories)
+                if higher and 0<offset<min(ring.frame.height*.45,width*.25):
+                    kind='CREASE';entry=dict(entry,kind=kind)
+                    self.brows.difference_update(ids);self.creases.update(ids)
+            corrected.append((side,kind,ids,entry))
+        self.accessories=corrected
         # UV seams and double-sided cards may duplicate the same material
         # point. Shared band roots must remain band roots on every copy.
         from mathutils.kdtree import KDTree

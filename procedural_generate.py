@@ -9,7 +9,7 @@ from . import procedural_rig as R,procedural_atoms as E,region_blender as A,regi
 from .region_rigid_parts import RigidTeeth
 from . import expression_rules as Rules
 
-VERSION=45
+VERSION=46
 
 
 @lru_cache(maxsize=8)

@@ -77,22 +77,29 @@ def fit_rigid_contact(rig,delta,recipe):
             residual=before[roots]-original[roots]
             score=float(np.mean(residual**2));worst=float(np.max(abs(residual)))
             best=cloud;best_score=score
-            # Small rigid rotations preserve every edge length and the authored
+            # Rigid rotations preserve every edge length and the authored
             # continuous outline. No independent root snapping or scaling.
             angles=np.deg2rad([-8.,-4.,-2.,-.5,0.,.5,2.,4.,8.])
+            upper=sum(is_upper(rig,side,int(i)) for i in ids)>len(ids)/2
+            pitch_angles=np.deg2rad([-60.,-45.,-30.,-20.,-12.,-8.,-4.,0.,4.,8.,12.,20.,30.,45.,60.]) if upper else angles
             from itertools import product
-            for ax,az,z_offset in product(angles,angles,(-.02*width,0.,.02*width)):
+            offsets=np.array([-.10,-.06,-.03,0.,.03,.06,.10])*width if upper else np.array([-.02,0.,.02])*width
+            yaw_angles=np.deg2rad([-20.,-10.,0.,10.,20.]) if upper else [0.]
+            for ax,ay,az,z_offset in product(pitch_angles,yaw_angles,angles,offsets):
                 cx,sx=np.cos(ax),np.sin(ax);rx=np.array(((1,0,0),(0,cx,-sx),(0,sx,cx)))
+                cy,sy=np.cos(ay),np.sin(ay);ry=np.array(((cy,0,sy),(0,1,0),(-sy,0,cy)))
                 cz,sz=np.cos(az),np.sin(az);rz=np.array(((cz,-sz,0),(sz,cz,0),(0,0,1)))
-                candidate=(cloud-centre)@(rz@rx).T+centre
+                candidate=(cloud-centre)@(rz@ry@rx).T+centre
                 candidate[:,2]+=z_offset;gap=gaps(candidate)
-                if not np.all(np.isfinite(gap[valid])):continue
-                shift=min(float(np.mean(gap[roots]-original[roots])),float(np.min((gap-floor)[valid])))
+                if not np.all(np.isfinite(gap[roots])):continue
+                if not upper and not np.all(np.isfinite(gap[valid])):continue
+                covered=valid&np.isfinite(gap)
+                shift=min(float(np.mean(gap[roots]-original[roots])),float(np.min((gap-floor)[covered])))
                 if shift < -width*.15:continue
                 shift=min(shift,width*.15);candidate[:,1]+=shift
                 error=gap[roots]-shift-original[roots];value=float(np.mean(error**2))
                 if value>=best_score or np.max(abs(error))>worst+width*1e-6:continue
-                if np.count_nonzero(abs(error)>width*.001)>np.count_nonzero(abs(residual)>width*.001):continue
+                if not upper and np.count_nonzero(abs(error)>width*.001)>np.count_nonzero(abs(residual)>width*.001):continue
                 # Test triangle interiors too. Reject candidates that add
                 # penetration instead of pushing individual vertices out.
                 trial=posed.copy();trial[ids]=candidate
@@ -1335,42 +1342,29 @@ def band_motion_curve(rig,delta,side,lid=None,eye=None):
 
 
 def follow_creases(rig,delta,recipe,lids=None):
-    """Bind every crease section to the final band, including its Y correction."""
-    from .region_contours import lip_weights
-    excluded=rig.strands|rig.brows|rig.creases|getattr(rig,'upper_followers',set());rest=rig.points;posed=rest+delta
-    total=np.zeros_like(delta);counts=np.zeros(len(delta));rims={i for rows in rig.rows.values() for i,u,upper in rows}
-    for side_text in recipe.get('eyes',{}):
-        side=int(side_text)
-        if side not in rig.rings:continue
-        lid=(lids or {}).get(side);eye=recipe['eyes'][side_text]
-        motion=band_motion_curve(rig,delta,side,lid,eye)
-        band=[list(t) for t,f in rig.mesh_triangles if rig.info['labels'][f]==2 and not set(t)&excluded
-              and (1 if rest[list(t),0].mean()>=rig.info['plane'] else -1)==side
-              and sum(rig.lash_upper.get(i,rig.rings[side].locate(Vector(rest[i]))[1]) for i in t)>=2]
-        tree=BVHTree.FromPolygons([Vector(p) for p in rest],band) if band else None
-        accessories=list(rig.accessories)+[(s,'CREASE',ids,None) for s,ids in getattr(rig,'upper_follower_groups',[])]
+    """Attach creases to eye-only Face motion, independent of brows/lashes."""
+    rest=rig.points;motion=getattr(rig,'crease_skin_motion',np.zeros_like(delta))
+    rims={i for rows in rig.rows.values() for i,u,upper in rows};changed=set()
+    accessories=list(rig.accessories)+[(s,'CREASE',ids,None) for s,ids in getattr(rig,'upper_follower_groups',[])]
+    for side in rig.rings:
+        triangles=[list(t) for t in rig.field.triangles if not set(t)&rig.creases
+                   and set(t)&rig.eye_skin.regions.get(side,set())]
+        if not triangles:continue
+        tree=BVHTree.FromPolygons([Vector(p) for p in rest],triangles)
         for s,kind,ids,entry in accessories:
             if s!=side or kind!='CREASE':continue
-            ids=sorted(set(ids)-rims-rig.brows)
-            if not ids:continue
-            x,group=np.unique(rest[ids,0],return_inverse=True)
-            for number in range(len(x)):
-                local=[i for i,k in zip(ids,group) if k==number];anchor=rest[local].mean(0)
-                follow=None
-                if motion is not None:
-                    final=getattr(rig,'lash_final_transports',{}).get(side)
-                    transported=final(anchor)[0] if final else rig.lash_position(side,anchor,lid,eye['closure'],eye.get('lash_shape_preserve',0.),eye.get('flat',0.)) if lid is not None else None
-                    follow=(transported if transported is not None else anchor)+motion(anchor)
-                if follow is None:
-                    u=rig.parameter('EYE',side,True,anchor)
-                    follow=anchor+sum((delta[i]*w for i,w in lip_weights(rig.rows['EYE',side],u,True)),np.zeros(3))
-                movement=follow-anchor
-                total[local]+=movement;counts[local]+=1
-            
-            if entry is not None:total[ids]+=np.array([B.edit_offset(entry,rest[i]) for i in ids])
-    ids=np.flatnonzero(counts);delta[ids]=total[ids]/counts[ids,None]
-    return delta,dict(crease_follow_vertices=len(ids))
-
+            for i in sorted(set(ids)-rims-rig.brows):
+                if str(side) not in recipe.get('eyes',{}):
+                    delta[i]=0.;changed.add(i);continue
+                hit,normal,index,distance=tree.find_nearest(Vector(rest[i]))
+                if hit is None:continue
+                tri=triangles[index];cloud=rest[tri]
+                uv=np.linalg.lstsq(np.column_stack((cloud[1]-cloud[0],cloud[2]-cloud[0])),np.asarray(hit)-cloud[0],rcond=None)[0]
+                weights=np.array((1-uv.sum(),uv[0],uv[1]))
+                delta[i]=weights@motion[tri]
+                if entry is not None:delta[i]+=B.edit_offset(entry,rest[i])
+                changed.add(i)
+    return delta,dict(crease_follow_vertices=len(changed))
 
 def bend(points,root,axis,length,controls,transform,section_dimension):
     axial=(points-root)@axis;u=np.clip(axial/length,0,1)

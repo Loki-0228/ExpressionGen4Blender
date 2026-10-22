@@ -533,6 +533,7 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     notify(rig,'平滑眼周脸皮')
     eye_delta=rig.eye_skin.deform(eye_raw,active)
     eye_delta=Anatomy.skin_motion(rig,eye_raw,eye_delta,recipe)
+    rig.crease_skin_motion=eye_delta.copy()
     for side_text,coefficients in recipe.get('brows',{}).items():
         side=int(side_text);width=rig.widths.get(('EYE',side))
         if not width:continue
@@ -627,7 +628,7 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     notify(rig,'单根睫毛随睫毛带运动')
     delta,lash_quality=Lashes.deform(rig,delta,lash_recipe,active)
     quality.update(lash_quality)
-    notify(rig,'双眼皮与上眼皮部件跟随睫毛曲线')
+    notify(rig,'双眼皮跟随眼部脸皮')
     delta,crease_quality=Lashes.follow_creases(rig,delta,lash_recipe,active)
     quality.update(crease_quality)
     notify(rig,'整片睫毛贴合')
@@ -687,6 +688,8 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     if followers is not None:
         delta=followers.apply(delta)
         quality['face_follower_vertices']=len(followers.vertices)
+    delta,crease_quality=Lashes.follow_creases(rig,delta,lash_recipe,active)
+    quality.update(crease_quality)
     rig.last_oral_deformation=Cavity.reattach(rig,delta,rig.last_oral_deformation)
     # The crease-follow pass can move Face-labelled strips after the earlier
     # skin repair. Report the finished mesh too, not only that earlier stage.
