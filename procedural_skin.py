@@ -32,6 +32,28 @@ class FaceFollowers:
         groups={}
         for i in parent:groups.setdefault(root(i),set()).add(i)
         controls=set(controls)
+        controlled=[ids for ids in groups.values() if ids&controls]
+        if len(controlled)>1:
+            # Controls can be split between overlapping Face layers. Select
+            # the local driver by its contour, never by material name or by
+            # declaring every controlled layer an independent whole face.
+            from mathutils.kdtree import KDTree
+            contour=sorted(controls&set(parent));tree=KDTree(len(contour))
+            # Use facial coordinates: a layer's depth offset must not change
+            # which contour owns the same point on the visible face.
+            for i in contour:tree.insert(Vector((points[i,0],0.,points[i,2])),i)
+            tree.balance()
+            owner={i:root(tree.find(Vector((points[i,0],0.,points[i,2])))[1]) for i in parent}
+            bindings=[]
+            for ids in controlled:
+                binding=FaceFollowers(points,triangles,controls&ids)
+                source=root(next(iter(ids)))
+                keep=np.array([owner[int(i)]==source for i in binding.vertices],dtype=bool)
+                bindings.append((binding,keep))
+            self.vertices=np.concatenate([b.vertices[k] for b,k in bindings])
+            self.triangles=np.concatenate([b.triangles[k] for b,k in bindings])
+            self.weights=np.concatenate([b.weights[k] for b,k in bindings])
+            return
         hosts=set().union(*(ids for ids in groups.values() if ids&controls))
         if not hosts:
             # Custom-only rigs can have no eye or lip contour. Use geometric
@@ -150,9 +172,17 @@ class EyelidSkin:
                 solved=field.deform(seed)
                 solved=field.smooth_displacement(solved,bending=.5)
             else:solved=field.smooth_displacement(seed)
-            ids=np.asarray(sorted(set(field.free.tolist())|set(links)),dtype=np.int32);fade=self.falloff[side][ids]
-            total[ids]+=solved[ids]*fade[:,None]
-            weight[ids]+=fade;moved.update(ids.tolist())
+            followers=getattr(self.rig,'eye_followers',{}).get(side)
+            ids=np.asarray(sorted(set(field.free.tolist())|set(links)),dtype=np.int32)
+            if followers is not None and len(followers.vertices):
+                ids=np.union1d(ids,sorted(controls))
+            fade=self.falloff[side][ids]
+            contribution=np.zeros_like(raw);coverage=np.zeros((len(raw),1))
+            contribution[ids]=solved[ids]*fade[:,None];coverage[ids,0]=fade
+            if followers is not None:
+                contribution=followers.apply(contribution);coverage=followers.apply(coverage)
+            total+=contribution;weight+=coverage[:,0]
+            moved.update(np.flatnonzero(coverage[:,0]>0).tolist())
         if moved:
             ids=sorted(moved)
             # Overlap is a partition of influence, never a double eyelid pull.

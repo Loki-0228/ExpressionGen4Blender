@@ -188,6 +188,14 @@ class Rig:
         face_triangles=[tuple(t.vertices) for t in ob.data.loop_triangles if self.info['labels'][t.polygon_index]==0]
         self.face_followers=FaceFollowers(self.original_points,face_triangles,
             {i for rows in self.info['rows'].values() for i,u,upper in rows})
+        lip_controls={i for i,u,upper in self.info['rows'].get(('LIP',0),[])}
+        self.mouth_followers=FaceFollowers(self.original_points,face_triangles,lip_controls) if lip_controls else None
+        self.eye_followers={side:FaceFollowers(self.original_points,face_triangles,{i for i,u,upper in rows})
+                            for (kind,side),rows in self.info['rows'].items() if kind=='EYE'}
+        if self.mouth_followers is not None:
+            neutral=self.mouth_followers.apply(self.points-self.original_points)
+            ids=self.mouth_followers.vertices
+            self.points[ids]=self.original_points[ids]+neutral[ids]
         if len(self.face_followers.vertices):
             neutral=self.face_followers.apply(self.points-self.original_points)
             ids=self.face_followers.vertices

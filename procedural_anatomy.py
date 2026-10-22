@@ -94,7 +94,12 @@ def skin_motion(rig,raw,delta,recipe):
         q=base[ids]+motion[ids];theta,phi,length=q.T
         posed=center+np.column_stack((length*np.sin(theta),-length*np.cos(theta)*np.cos(phi),length*np.cos(theta)*np.sin(phi)))
         weight=rig.eye_skin.falloff[side][ids]
-        total[ids]+=(posed-rest[ids])*weight[:,None];weights[ids]+=weight
+        contribution=np.zeros_like(delta);coverage=np.zeros((len(delta),1))
+        contribution[ids]=(posed-rest[ids])*weight[:,None];coverage[ids,0]=weight
+        followers=getattr(rig,'eye_followers',{}).get(side)
+        if followers is not None:
+            contribution=followers.apply(contribution);coverage=followers.apply(coverage)
+        total+=contribution;weights+=coverage[:,0]
     ids=np.flatnonzero(weights>0)
     result[ids]=total[ids]/weights[ids,None]
     return result

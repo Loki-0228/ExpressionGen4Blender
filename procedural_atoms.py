@@ -573,6 +573,11 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
         delta=Lips.closed_motion(rig,delta)
     notify(rig,'求解面部位移场')
     skin=Lips.deform(rig,delta-eye_raw,recipe)
+    # Transfer only the mouth field. A second Face layer may own the other
+    # eye's controls, so copying the combined pose would erase that eye.
+    mouth_followers=getattr(rig,'mouth_followers',None)
+    if mouth_followers is not None and Lips.active(rig,recipe):
+        skin=mouth_followers.apply(skin)
     delta=skin+eye_delta
     delta,lip_quality=Q.lower_lip_depth(rig,delta,recipe)
     delta,depth_profiles,eye_quality=Q.finalize_skin(rig,delta,recipe)
