@@ -50,17 +50,75 @@ def clearance(obstacle,point):
     return None if hit is None else float(hit.y-point[1])
 
 
+def relax_lash_card(rest,edges,roots,target,initial,weld=True):
+    """Locally rigid bending with fixed eyelid roots and unconstrained tips."""
+    if not len(edges):return initial
+    if weld:
+        _,first,mapping=np.unique(np.round(rest/1e-8).astype(np.int64),axis=0,return_index=True,return_inverse=True)
+        if len(first)<len(rest):
+            joined=np.array(sorted({tuple(sorted((int(mapping[a]),int(mapping[b])))) for a,b in edges if mapping[a]!=mapping[b]}),dtype=int)
+            fixed=np.unique(mapping[roots]);goals=np.array([target[mapping[roots]==i].mean(0) for i in fixed])
+            output=relax_lash_card(rest[first],joined,fixed,goals,initial[first],False)
+            return output[mapping]+rest-rest[first][mapping]
+    # A disconnected tip without a welded root still needs an attachment;
+    # otherwise its Laplacian has a translation nullspace.
+    neighbors=[set() for _ in rest]
+    for a,b in edges:neighbors[a].add(int(b));neighbors[b].add(int(a))
+    remaining=set(range(len(rest)));root_set=set(roots);extra=[];goals=[]
+    while remaining:
+        component={remaining.pop()};pending=list(component)
+        while pending:
+            for j in neighbors[pending.pop()]&remaining:
+                remaining.remove(j);component.add(j);pending.append(j)
+        if component&root_set:continue
+        local=np.array(sorted(component),dtype=int)
+        near=np.unravel_index(np.argmin(np.linalg.norm(rest[local,None]-rest[roots][None,:],axis=2)),(len(local),len(roots)))[1]
+        shift=target[near]-initial[roots[near]]
+        extra.extend(local);goals.extend(initial[local]+shift)
+    if extra:
+        roots=np.concatenate((roots,np.asarray(extra,dtype=int)));target=np.vstack((target,goals))
+    a,b=edges.T;vectors=rest[a]-rest[b]
+    weights=1/np.maximum(np.linalg.norm(vectors,axis=1),1e-9)
+    weights/=np.median(weights)
+    laplacian=np.zeros((len(rest),len(rest)))
+    np.add.at(laplacian,(a,a),weights);np.add.at(laplacian,(b,b),weights)
+    np.add.at(laplacian,(a,b),-weights);np.add.at(laplacian,(b,a),-weights)
+    free=np.array(sorted(set(range(len(rest)))-set(roots)),dtype=int)
+    posed=initial.copy();posed[roots]=target
+    if not len(free):return posed
+    matrix=laplacian[np.ix_(free,free)];boundary=laplacian[np.ix_(free,roots)]@target
+    # Factor once; every iteration changes only the desired local rotations.
+    inverse=np.linalg.inv(matrix+np.eye(len(free))*1e-10)
+    for _ in range(24):
+        current=posed[a]-posed[b]
+        covariance=np.zeros((len(rest),3,3))
+        products=weights[:,None,None]*np.einsum('ki,kj->kij',vectors,current)
+        np.add.at(covariance,a,products);np.add.at(covariance,b,products)
+        u,_,vh=np.linalg.svd(covariance)
+        rotations=np.transpose(vh,(0,2,1))@np.transpose(u,(0,2,1))
+        reflected=np.linalg.det(rotations)<0
+        vh[reflected,-1]*=-1
+        rotations=np.transpose(vh,(0,2,1))@np.transpose(u,(0,2,1))
+        desired=.5*weights[:,None]*np.einsum('kij,kj->ki',rotations[a]+rotations[b],vectors)
+        rhs=np.zeros_like(rest);np.add.at(rhs,a,desired);np.add.at(rhs,b,-desired)
+        updated=inverse@(rhs[free]-boundary)
+        change=float(np.max(abs(updated-posed[free])))
+        posed[free]=updated
+        if change<1e-9:break
+    return posed
+
+
 def follow_lash_sections(rig,delta,recipe):
-    """Transport complete upper cards once, retaining their authored sections."""
-    result=delta.copy();changed=0;units_count=0
+    """Follow the lid smoothly while bounding strain on authored lifted tips."""
+    result=delta.copy();changed=0;units_count=0;bend_max=0.;follow_min=1.;root_error=0.
     protected=rig.brows|rig.creases|getattr(rig,'upper_followers',set())
     for side_text in recipe.get('eyes',{}):
         side=int(side_text)
         if side not in rig.rings:continue
         rim=sorted({i for i,u,up in rig.rows['EYE',side] if up or u<1e-7 or u>1-1e-7})
         if len(rim)<3:continue
-        x,inverse=np.unique(rig.points[rim,0],return_inverse=True)
-        motion=np.array([np.mean(delta[np.asarray(rim)[inverse==k]],axis=0) for k in range(len(x))])
+        chain=[i for u,i in sorted({(u,i) for i,u,up in rig.rows['EYE',side] if up or u<1e-7 or u>1-1e-7})]
+        line=B.Line(rig.points[chain])
         units,skin=contact_units(rig,side)
         for unit in units:
             ids=np.asarray(unit['ids'],dtype=np.int32)
@@ -68,9 +126,9 @@ def follow_lash_sections(rig,delta,recipe):
             if sum(is_upper(rig,side,int(i)) for i in ids)<=len(ids)/2:continue
             # Branch ownership belongs to the connected card. Its returned
             # outer tip must not suddenly inherit lower-eyelid displacement.
-            # One translation per longitudinal section preserves YZ offsets,
-            # thickness and the lifted arc; no pitch, curl or tip projection.
-            movement=np.column_stack([np.interp(rig.points[ids,0],x,motion[:,axis]) for axis in range(3)])
+            # Bind along the upper rim arc, including near-vertical corners.
+            parameters=np.array([line.project(rig.points[i])[0] for i in ids])
+            movement=np.column_stack([np.interp(parameters,line.parameters,delta[chain,axis]) for axis in range(3)])
             pair=rig.lash_lines.get(side)
             if pair is not None:
                 base,current=pair
@@ -80,8 +138,15 @@ def follow_lash_sections(rig,delta,recipe):
             # Fit the whole authored card to its eyelid-root targets. Applying
             # those targets separately shears the thin return triangles even
             # without the old curl pass. Lifted vertices do not drive the fit.
-            roots=np.array([k for k,i in enumerate(ids) if i not in rig.strands
-                            and unit['gaps'][i] is not None and abs(unit['gaps'][i])<=rig.widths['EYE',side]*.015],dtype=int)
+            roots=np.array([k for k,i in enumerate(ids) if i not in rig.strands and is_upper(rig,side,int(i))
+                            and unit['gaps'][i] is not None and abs(unit['gaps'][i])<=rig.widths['EYE',side]*.005],dtype=int)
+            if len(roots)<3:continue
+            sections={}
+            for k in roots:
+                section=min(int(parameters[k]*16),15)
+                distance=line.project(rig.points[ids[k]])[1]
+                if section not in sections or distance<sections[section][0]:sections[section]=(distance,k)
+            roots=np.array([value[1] for key,value in sorted(sections.items())],dtype=int)
             if len(roots)<3:continue
             rest=rig.points[ids];source=rest[roots];target=source+movement[roots]
             center=source.mean(0);destination=target.mean(0)
@@ -89,10 +154,20 @@ def follow_lash_sections(rig,delta,recipe):
             transform=vh.T@u.T
             if np.linalg.det(transform)<0:
                 vh[-1]*=-1;transform=vh.T@u.T
-            result[ids]=(rest-center)@transform.T+destination-rest
-            # Keep the originally visible sheet in front of the final lid.
-            # Resolve contact by translating the entire card, never by
-            # flattening exposed tips or moving individual section vertices.
+            rigid=(rest-center)@transform.T+destination
+            # Root motion comes from the eyelid, not a blend with a rigid
+            # pose. Relax the rest of the connected card with local rotations
+            # so its raised sections keep their shape while the band bends.
+            lookup={int(i):k for k,i in enumerate(ids)};selected=set(lookup)
+            triangles=np.array([[lookup[i] for i in tri] for tri,f in rig.mesh_triangles if set(tri)<=selected],dtype=int).reshape((-1,3))
+            edges=np.array(sorted({tuple(sorted((tri[k],tri[(k+1)%3]))) for tri in triangles for k in range(3)}),dtype=int)
+            candidate=relax_lash_card(rest,edges,roots,target,rigid)
+            root_error=max(root_error,float(np.linalg.norm((candidate[roots]-target)[:,[0,2]],axis=1).max()))
+            result[ids]=candidate-rest
+            bend_max=max(bend_max,float(np.linalg.norm(candidate-rigid,axis=1).max()))
+            follow_min=min(follow_min,1.)
+            # Keep the visible sheet continuous using one minimal depth
+            # translation. XZ attachment and the relaxed curvature stay fixed.
             parents=unit['parents'];weights=unit['weights']
             if len(parents) and skin:
                 shift=0.
@@ -103,7 +178,9 @@ def follow_lash_sections(rig,delta,recipe):
                     shift=min(shift,float(np.min(contact))/weight)
                 result[ids,1]+=shift
             changed+=len(ids);units_count+=1
-    return result,dict(lash_section_vertices=changed,lash_section_units=units_count)
+    return result,dict(lash_section_vertices=changed,lash_section_units=units_count,
+                       lash_bend_max=bend_max,lash_bend_gain=follow_min if units_count else 0.,
+                       lash_root_attachment_error=root_error)
 
 
 def fit_rigid_contact(rig,delta,recipe):
@@ -119,6 +196,8 @@ def fit_rigid_contact(rig,delta,recipe):
         for unit in units:
             ids=np.asarray(unit['ids'],dtype=np.int32)
             if unit['locked'] or protected.intersection(ids):continue
+            # Upper cards have fixed roots and their own smooth contact pass.
+            if sum(is_upper(rig,side,int(i)) for i in ids)>len(ids)/2:continue
             cloud=posed[ids].copy()
             original=np.array([unit['gaps'][i] if unit['gaps'][i] is not None else np.nan for i in ids])
             gaps=np.array([v if (v:=clearance(obstacle,p)) is not None else np.nan for p in cloud])
