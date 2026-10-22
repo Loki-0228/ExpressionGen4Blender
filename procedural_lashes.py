@@ -156,8 +156,128 @@ def return_lash_tip_targets(rig,side,ids,edges,rest,posed,delta,recipe):
         angle=np.arctan2(current[2],current[0])-np.arctan2(tangent[2],tangent[0])
         angle=float(np.arctan2(np.sin(angle),np.cos(angle)))*closure
         turn=np.asarray(Matrix.Rotation(angle,3,'Y'))
-        tips.append(tip);targets.append(posed[boundary].mean(0)+turn@current)
+        goal=posed[boundary].mean(0)+turn@current
+        # A tangent alone leaves a smiling return below the curved closed lid.
+        # Place its end on that curve, then let the attached ribbon bend to it.
+        order=np.argsort(closed[:,0])
+        height=np.interp(goal[0],closed[order,0],closed[order,2])
+        goal[2]+=(height-goal[2])*closure
+        tips.append(tip);targets.append(goal)
+        if len(local)>3:
+            distance=np.linalg.norm(rest[local]-rest[tip],axis=1)
+            middle=int(local[np.argmin(abs(distance-np.linalg.norm(source)*.4))])
+            if middle!=tip:
+                mid=posed[boundary].mean(0)+turn@(posed[middle]-posed[boundary].mean(0))
+                mid[2]+=(np.interp(mid[0],closed[order,0],closed[order,2])-mid[2])*closure
+                tips.append(middle);targets.append(mid)
     return tips,targets
+
+
+def outer_lash_wings(rig,side,ids,edges,stitches):
+    """Find outward free wings beyond the eyelid, excluding the inward hook."""
+    width=rig.widths['EYE',side]
+    outer=max((rig.points[i,0]-rig.info['plane'])*side for i,u,up in rig.rows['EYE',side])
+    neighbors=[set() for _ in ids]
+    for a,b in edges:neighbors[a].add(int(b));neighbors[b].add(int(a))
+    for group in stitches:
+        for k in group:neighbors[k].update(set(group)-{k})
+    remaining={k for k,i in enumerate(ids) if is_upper(rig,side,int(i))
+               and (rig.points[i,0]-rig.info['plane'])*side>outer+width*.08}
+    groups=[]
+    while remaining:
+        group={remaining.pop()};pending=list(group)
+        while pending:
+            for j in neighbors[pending.pop()]&remaining:
+                remaining.remove(j);group.add(j);pending.append(j)
+        boundary=set.union(*(neighbors[k] for k in group))-group
+        if len(group)>=3 and boundary and np.ptp(rig.points[ids[list(group)],0])>width*.04:
+            groups.append((np.array(sorted(group),dtype=int),np.array(sorted(boundary),dtype=int)))
+    return groups
+
+
+def fit_lash_depth(rig,side,unit,skin,ids,edges,stitches,candidate,delta):
+    """Fit a smooth depth field to Face without translating the entire card."""
+    if not skin or not len(unit['parents']):return candidate
+    from .procedural_projection import project
+    lookup={int(i):k for k,i in enumerate(ids)}
+    rest=rig.points[ids];x=rest[:,0];parameter=(x-x.min())/max(float(np.ptp(x)),1e-12)
+    # One smooth translation and cross-section tilt along the band. These
+    # shared controls avoid independent depth clamps on individual vertices.
+    sections=B.spline_basis(parameter,13)
+    rim=sorted({i for i,u,up in rig.rows['EYE',side] if up or u<1e-7 or u>1-1e-7},key=lambda i:rig.points[i,0])
+    height=np.interp(x,rig.points[rim,0],rig.points[rim,2])
+    across=(rest[:,2]-height)/rig.widths['EYE',side]
+    basis=np.column_stack((sections,sections*across[:,None]))
+    lower=np.array([not is_upper(rig,side,int(i)) for i in ids])
+    if np.any(lower):
+        height=float(rest[lower,2].max());span=max(height-float(rest[lower,2].min()),1e-12)
+        hook=np.where(lower,np.clip((height-rest[:,2])/span,0.,1.),0.)
+        basis=np.column_stack((basis,hook))
+    for group,boundary in outer_lash_wings(rig,side,ids,edges,stitches):
+        basis[group]=basis[boundary].mean(0)
+    for group in stitches:basis[group]=basis[group].mean(0)
+    count=basis.shape[1];laplacian=np.zeros((22,count))
+    laplacian[:11,:13]=np.diff(np.eye(13),n=2,axis=0)
+    laplacian[11:,13:26]=np.diff(np.eye(13),n=2,axis=0)
+    after=surface(rig.points+delta,skin);preferences=[];rows=[]
+    for k,i in enumerate(ids):
+        gap=clearance(after,candidate[k]);old=unit['gaps'][i]
+        if gap is None or old is None:continue
+        strength=5. if abs(old)<=rig.widths['EYE',side]*.005 else 1.
+        rows.append(basis[k]*strength)
+        # Raised spikes retain the transported depth profile; only embedded
+        # roots seek the face. A ray at a moved spike can hit a different
+        # part of the head and must not pull its whole stem through the skin.
+        preferences.append((gap-old if abs(old)<=rig.widths['EYE',side]*.015 else 0.)*strength)
+    if not rows:return candidate
+    attachment=np.asarray(rows);preferences=np.asarray(preferences)
+    metric=np.linalg.inv(attachment.T@attachment+8*laplacian.T@laplacian+np.eye(count)*1e-4)
+    preferred=metric@attachment.T@preferences
+    parents=unit['parents'];weights=unit['weights']
+    local=np.array([[lookup[i] for i in tri] for tri in parents])
+    clipped_basis=np.einsum('kij,kjn->kin',weights,basis[local])
+    constraints=[];limits=[]
+    for weight in (.25,.5,.75,1.):
+        points=rig.points[ids]+(candidate-rig.points[ids])*weight
+        cloud=np.einsum('kij,kja->kia',weights,points[local])
+        obstacles=(rig.points+delta*weight)[np.asarray(skin)]
+        plane=cloud[:,:,[0,2]];other=obstacles[:,:,[0,2]]
+        ia,ib=np.nonzero(np.all(plane.min(1)[:,None]<=other.max(1),axis=-1)&np.all(plane.max(1)[:,None]>=other.min(1),axis=-1))
+        if not len(ia):continue
+        wa,wb,valid=S.overlap_vertices(plane[ia],other[ib]);k,v=np.nonzero(valid)
+        rows=np.einsum('ki,kij->kj',wa[k,v],clipped_basis[ia[k]])
+        bounds=(np.sum(wb[k,v]*obstacles[ib[k],:,1],axis=1)-np.sum(wa[k,v]*cloud[ia[k],:,1],axis=1))/weight
+        constraints.extend(rows);limits.extend(bounds)
+    # Changing depth must not invert the thin ribbon during shape-key mixing.
+    selected=set(lookup)
+    triangles=np.array([[lookup[i] for i in tri] for tri,f in rig.mesh_triangles if set(tri)<=selected])
+    rest=rig.points[ids];a,b,c=triangles.T
+    normal=np.cross(rest[b]-rest[a],rest[c]-rest[a]);area=np.linalg.norm(normal,axis=1)
+    normal/=np.maximum(area[:,None],1e-20);ey=np.array((0.,1.,0.))
+    for weight in np.linspace(.05,1.,20):
+        posed=rest+(candidate-rest)*weight;ab=posed[b]-posed[a];ac=posed[c]-posed[a]
+        coefficients=np.stack((np.cross(-ey,ac)+np.cross(ab,-ey),np.cross(ey,ac),np.cross(ab,ey)),axis=1)
+        coefficients=np.einsum('kij,kj->ki',coefficients,normal)*weight
+        rows=-np.einsum('ki,kij->kj',coefficients,basis[triangles])
+        bounds=np.einsum('ki,ki->k',np.cross(ab,ac),normal)-area*.05
+        scale=np.maximum(np.linalg.norm(rows,axis=1),1e-12)
+        constraints.extend(rows/scale[:,None]);limits.extend(bounds/scale)
+    a,b=edges.T;length=np.linalg.norm(rest[a]-rest[b],axis=1)
+    difference=candidate[a]-candidate[b]
+    limit=np.sqrt(np.maximum((length*1.45)**2-np.sum(difference[:,[0,2]]**2,axis=1),0.))
+    rows=basis[a]-basis[b]
+    constraints.extend(rows);limits.extend(limit-difference[:,1])
+    constraints.extend(-rows);limits.extend(limit+difference[:,1])
+    result=candidate.copy()
+    if constraints:
+        rows=np.asarray(constraints);limits=np.asarray(limits)-rows@preferred
+        directions=rows@metric;norm=np.sum(rows*directions,axis=1)
+        correction=project(rows,limits,directions,norm,rig.widths['EYE',side]*1e-7)
+        if np.max(rows@correction-limits)>rig.widths['EYE',side]*1e-5:
+            raise B.ClosureStyleError('睫毛贴面与形状保持约束冲突，无法生成该表情')
+        preferred+=correction
+    result[:,1]+=basis@preferred
+    return result
 
 
 def follow_lash_sections(rig,delta,recipe):
@@ -218,23 +338,25 @@ def follow_lash_sections(rig,delta,recipe):
             candidate=relax_lash_card(rest,edges,roots,target,rigid,stitches=stitches)
             tips,goals=return_lash_tip_targets(rig,side,ids,edges,rest,candidate,delta,recipe)
             if tips:
-                candidate=relax_lash_card(rest,edges,np.r_[roots,tips],np.vstack((target,goals)),candidate,stitches=stitches)
+                local={k for k,i in enumerate(ids) if not is_upper(rig,side,int(i))}
+                for _ in range(2):
+                    local|={int(b) for a,b in edges if a in local}|{int(a) for a,b in edges if b in local}
+                    for group in stitches:
+                        if local.intersection(group):local.update(group)
+                fixed=np.array(sorted(set(roots)|(set(range(len(ids)))-local)),dtype=int)
+                candidate=relax_lash_card(rest,edges,np.r_[fixed,tips],np.vstack((candidate[fixed],goals)),candidate,stitches=stitches)
                 return_tips+=len(tips)
+            for group,boundary in outer_lash_wings(rig,side,ids,edges,stitches):
+                source=rest[np.r_[boundary,group]];posed=candidate[np.r_[boundary,group]]
+                origin=rest[boundary].mean(0);anchor=candidate[boundary].mean(0)
+                u,_,vh=np.linalg.svd((source-origin).T@(posed-anchor));frame=vh.T@u.T
+                if np.linalg.det(frame)<0:vh[-1]*=-1;frame=vh.T@u.T
+                candidate[group]=(rest[group]-origin)@frame.T+anchor
             root_error=max(root_error,float(np.linalg.norm((candidate[roots]-target)[:,[0,2]],axis=1).max()))
-            result[ids]=candidate-rest
             bend_max=max(bend_max,float(np.linalg.norm(candidate-rigid,axis=1).max()))
             follow_min=min(follow_min,1.)
-            # Keep the visible sheet continuous using one minimal depth
-            # translation. XZ attachment and the relaxed curvature stay fixed.
-            parents=unit['parents'];weights=unit['weights']
-            if len(parents) and skin:
-                shift=0.
-                for weight in (.25,.5,.75,1.):
-                    cloud=np.einsum('kij,kja->kia',weights,(rig.points+result*weight)[parents]).reshape((-1,3))
-                    faces=np.arange(len(cloud)).reshape((-1,3))
-                    contact=S.depth_bounds(cloud,faces,(rig.points+delta*weight)[np.asarray(skin)],np.ones(len(cloud)),coherent=True)[0]
-                    shift=min(shift,float(np.min(contact))/weight)
-                result[ids,1]+=shift
+            candidate=fit_lash_depth(rig,side,unit,skin,ids,edges,stitches,candidate,delta)
+            result[ids]=candidate-rest
             changed+=len(ids);units_count+=1
     return result,dict(lash_section_vertices=changed,lash_section_units=units_count,
                        lash_bend_max=bend_max,lash_bend_gain=follow_min if units_count else 0.,
