@@ -50,6 +50,62 @@ def clearance(obstacle,point):
     return None if hit is None else float(hit.y-point[1])
 
 
+def follow_lash_sections(rig,delta,recipe):
+    """Transport complete upper cards once, retaining their authored sections."""
+    result=delta.copy();changed=0;units_count=0
+    protected=rig.brows|rig.creases|getattr(rig,'upper_followers',set())
+    for side_text in recipe.get('eyes',{}):
+        side=int(side_text)
+        if side not in rig.rings:continue
+        rim=sorted({i for i,u,up in rig.rows['EYE',side] if up or u<1e-7 or u>1-1e-7})
+        if len(rim)<3:continue
+        x,inverse=np.unique(rig.points[rim,0],return_inverse=True)
+        motion=np.array([np.mean(delta[np.asarray(rim)[inverse==k]],axis=0) for k in range(len(x))])
+        units,skin=contact_units(rig,side)
+        for unit in units:
+            ids=np.asarray(unit['ids'],dtype=np.int32)
+            if unit['locked'] or protected.intersection(ids):continue
+            if sum(is_upper(rig,side,int(i)) for i in ids)<=len(ids)/2:continue
+            # Branch ownership belongs to the connected card. Its returned
+            # outer tip must not suddenly inherit lower-eyelid displacement.
+            # One translation per longitudinal section preserves YZ offsets,
+            # thickness and the lifted arc; no pitch, curl or tip projection.
+            movement=np.column_stack([np.interp(rig.points[ids,0],x,motion[:,axis]) for axis in range(3)])
+            pair=rig.lash_lines.get(side)
+            if pair is not None:
+                base,current=pair
+                for k,i in enumerate(ids):
+                    u=base.project(rig.points[i])[0]
+                    movement[k]+=current.sample(u)-base.sample(u)
+            # Fit the whole authored card to its eyelid-root targets. Applying
+            # those targets separately shears the thin return triangles even
+            # without the old curl pass. Lifted vertices do not drive the fit.
+            roots=np.array([k for k,i in enumerate(ids) if i not in rig.strands
+                            and unit['gaps'][i] is not None and abs(unit['gaps'][i])<=rig.widths['EYE',side]*.015],dtype=int)
+            if len(roots)<3:continue
+            rest=rig.points[ids];source=rest[roots];target=source+movement[roots]
+            center=source.mean(0);destination=target.mean(0)
+            u,_,vh=np.linalg.svd((source-center).T@(target-destination))
+            transform=vh.T@u.T
+            if np.linalg.det(transform)<0:
+                vh[-1]*=-1;transform=vh.T@u.T
+            result[ids]=(rest-center)@transform.T+destination-rest
+            # Keep the originally visible sheet in front of the final lid.
+            # Resolve contact by translating the entire card, never by
+            # flattening exposed tips or moving individual section vertices.
+            parents=unit['parents'];weights=unit['weights']
+            if len(parents) and skin:
+                shift=0.
+                for weight in (.25,.5,.75,1.):
+                    cloud=np.einsum('kij,kja->kia',weights,(rig.points+result*weight)[parents]).reshape((-1,3))
+                    faces=np.arange(len(cloud)).reshape((-1,3))
+                    contact=S.depth_bounds(cloud,faces,(rig.points+delta*weight)[np.asarray(skin)],np.ones(len(cloud)),coherent=True)[0]
+                    shift=min(shift,float(np.min(contact))/weight)
+                result[ids,1]+=shift
+            changed+=len(ids);units_count+=1
+    return result,dict(lash_section_vertices=changed,lash_section_units=units_count)
+
+
 def fit_rigid_contact(rig,delta,recipe):
     """Keep eyelid XZ placement and curl; adjust whole-card depth from roots."""
     result=delta.copy();report=dict(lash_rigid_units=0,lash_rigid_before=0.,lash_rigid_after=0.)

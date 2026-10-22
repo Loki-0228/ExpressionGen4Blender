@@ -98,6 +98,8 @@ class Solver:
                 quality=dict(quality,face_follower_vertices=len(followers.vertices))
                 result=delta,effective,shapes,quality,Custom.capture_curves(self.rig,delta)
             delta,effective,shapes,quality,curves=result
+            delta,sections=Lashes.follow_lash_sections(self.rig,delta,effective)
+            quality=dict(quality,**sections)
             delta,contact=Lashes.fit_rigid_contact(self.rig,delta,effective)
             quality=dict(quality,**contact)
             quality.update(Lashes.audit_attachment(self.rig,delta,effective))

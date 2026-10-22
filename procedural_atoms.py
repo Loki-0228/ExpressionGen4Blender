@@ -688,6 +688,8 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     if followers is not None:
         delta=followers.apply(delta)
         quality['face_follower_vertices']=len(followers.vertices)
+    delta,section_quality=Lashes.follow_lash_sections(rig,delta,lash_recipe)
+    quality.update(section_quality)
     delta,crease_quality=Lashes.follow_creases(rig,delta,lash_recipe,active)
     quality.update(crease_quality)
     rig.last_oral_deformation=Cavity.reattach(rig,delta,rig.last_oral_deformation)
