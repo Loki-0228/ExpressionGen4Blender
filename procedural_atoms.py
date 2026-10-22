@@ -558,12 +558,6 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
             hit=lip(u,upper);opposite=lip(u,not upper)
             if (hit[2]-opposite[2])*(1 if upper else -1)<0:hit[2]=(hit[2]+opposite[2])/2
             delta[i]=hit-points[i]
-    if 'jaw' in recipe and mouth:
-        center=np.array(mouth.frame.center)
-        for i,labels in enumerate(rig.members):
-            if 0 not in labels or points[i,2]>center[2]:continue
-            distance=np.linalg.norm((points[i]-center)/max(width,1e-9))
-            delta[i]+=np.array(recipe['jaw'])*width*np.exp(-distance*distance*2)
     # Resolve the exit before skin/teeth/cavity follow the mouth. A squeezed
     # throat can request a little lip motion without crushing the whole tongue.
     delta,tongue_quality=Tongue.deform(rig,delta,recipe)
@@ -683,6 +677,12 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     from . import procedural_contacts as Contacts
     delta,rig.last_oral_deformation,oral_quality=Contacts.finish(rig,delta,recipe,rig.last_oral_deformation)
     quality.update(oral_quality)
+    if 'jaw' in recipe and not any(recipe.get(k) for k in ('eyes','mouth','mouth_targets','brows','oral','tongue','custom_rules')):
+        # A contour-only jaw key leaves the complete closed mouth and oral
+        # interior at Basis, including incidental contact/neutral corrections.
+        delta=np.zeros_like(delta)
+        rig.last_oral_deformation={kind:np.zeros_like(value) for kind,value in rig.last_oral_deformation.items()}
+    delta=Lips.jaw_contour(rig,delta,recipe)
     followers=getattr(rig,'face_followers',None)
     if followers is not None:
         delta=followers.apply(delta)

@@ -19,6 +19,24 @@ def closed_reference(recipe):
         np.allclose(ref['upper'],ref['lower'],atol=1e-10,rtol=0) for ref in references)
 
 
+def jaw_contour(rig,delta,recipe):
+    """Adjust chin and cheeks while leaving the mouth collar in its pose."""
+    if 'jaw' not in recipe or ('LIP',0) not in rig.rows:return delta
+    points=rig.points;width=rig.widths['LIP',0];center=np.asarray(rig.info['mouth'].frame.center)
+    rim=sorted({i for i,u,up in rig.rows['LIP',0]})
+    distance=np.linalg.norm(points[:,None,[0,2]]-points[rim][None,:,[0,2]],axis=-1).min(1)/width
+    fade=np.clip((distance-.18)/.45,0,1);fade=fade*fade*(3-2*fade)
+    down=np.maximum((center[2]-points[:,2])/width,0.)
+    lower=np.clip(down/.45,0,1);lower=lower*lower*(3-2*lower)
+    x=(points[:,0]-center[0])/width
+    weight=fade*lower*np.exp(-(x/2.)**2-(down/1.8)**2)
+    weight[[i for i,m in enumerate(rig.members) if 0 not in m]]=0
+    movement=np.asarray(recipe['jaw'])*width
+    result=delta.copy();result+=weight[:,None]*movement
+    result[:,0]-=weight*x*abs(movement[2])*.35
+    return result
+
+
 def closed_motion(rig,delta):
     """Deform the already closed Basis without flattening its lip bevel."""
     ids=np.array(sorted({i for i,u,up in rig.rows['LIP',0]},key=lambda i:rig.points[i,0]))
@@ -33,8 +51,11 @@ def closed_motion(rig,delta):
         heights[upper]=np.interp(sample,rig.points[branch,0],rig.points[branch,2])
     if np.median(heights[True]-heights[False])>span*.001:
         result=delta.copy()
+        # Close height only. The two authored lip surfaces need not share
+        # depth: collapsing XYZ erases the bevel and the visible mouth line.
         for i,point in Binding.closed_rim(rig.rows['LIP',0],rig.points+delta,1).items():
-            result[i]=point-rig.points[i]
+            result[i,1]=0.
+            result[i,2]=point[2]-rig.points[i,2]
         return result
     t=(rest[:,0]-lo)/span
     count=9

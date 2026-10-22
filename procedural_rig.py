@@ -377,7 +377,9 @@ class Rig:
             # A single connected cavity remains one part; do not cut its mesh.
             for branch,indices in groups.items():
                 if indices:self.oral_parts[kind+'_'+branch]=indices
-        self.tongue=[i for i,labels in enumerate(self.members) if 12 in labels and 0 not in labels] if G.entries_for(snapshot,'TARGET','TONGUE',0) and self.info['mouth'] else []
+        # Explicit Tongue labels authorize internal motion even when its
+        # position prevented automatic guide detection. The guide is optional.
+        self.tongue=[i for i,labels in enumerate(self.members) if 12 in labels and 0 not in labels] if self.info['mouth'] else []
         self.points,self.tongue_report=Tongue.neutral(self)
         if self.tongue_report['reason']=='ambiguous_tongue_plane':
             self.warnings.append('舌头的主体平面不明确，Basis 保留原姿态，请检查 Tongue 分区')

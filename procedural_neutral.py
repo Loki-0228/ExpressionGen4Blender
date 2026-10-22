@@ -20,7 +20,8 @@ def closed_neutral(info,snapshot):
         x=ring.frame.axes(Vector(points[i]))[0]
         paired=[np.array([np.interp(x,h,cloud[:,axis]) for axis in range(3)]) for h,cloud in branches]
         contact=(paired[0]+paired[1])*.5
-        delta[i]=contact-points[i]
+        # Preserve authored depth and lateral detail at the lip seam.
+        delta[i,2]=contact[2]-points[i,2]
     skin={i for i,row in enumerate(info['members']) if 0 in row}
     # Restrict neutral correction to connected skin near the original mouth.
     import heapq

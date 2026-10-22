@@ -23,6 +23,19 @@ def key_coordinates(basis,delta,mapping,groups,oral,static_eyes):
     return coordinates
 
 
+def baked_shapes(rig,recipe,shapes):
+    """Store the evaluated oral pose in keys, independent of helper bones."""
+    from .procedural_cavity import part_pose
+    result={kind:value.copy() for kind,value in shapes.items()}
+    for kind in rig.oral_parts:
+        ids,center,rotation,translation=part_pose(rig,recipe,kind)
+        rest=rig.cavity_points if kind.startswith('mouth_') else rig.original_points
+        shape=result.setdefault(kind,np.zeros_like(rig.points))
+        cloud=rest[ids]+shape[ids]
+        shape[ids]=(cloud-center)@rotation.T+center+translation-rest[ids]
+    return result
+
+
 def geometry(output,rig):
     """Only split shared rim vertices; all faces remain in the same object."""
     eye_faces={i for i,label in enumerate(rig.info['labels']) if label in (3,5,7)}

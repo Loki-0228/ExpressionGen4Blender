@@ -9,7 +9,7 @@ from . import procedural_rig as R,procedural_atoms as E,region_blender as A,regi
 from .region_rigid_parts import RigidTeeth
 from . import expression_rules as Rules
 
-VERSION=43
+VERSION=44
 
 
 @lru_cache(maxsize=8)
@@ -167,17 +167,18 @@ def generate(target,partition,collection,families=None,strength=1.,lower_lid_sca
         output['ek_neutral_mouth_closed']=bool(rig.neutral_report['changed'])
         output['ek_neutral_tongue_leveled']=bool(rig.tongue_report['changed'])
         output.shape_key_add(name='Basis',from_mix=False)
-        parts=[Part(rig,kind,faces) for kind,faces in rig.oral_parts.items() if kind.startswith('teeth_')]
         for number,(name,delta,recipe,oral) in enumerate(accepted):
             if progress:progress.batch_step('写入形态键',number,len(accepted),name)
             key=output.shape_key_add(name=name,from_mix=False)
-            coordinates=Oral.key_coordinates(basis,delta,mapping,groups,oral,static_eyes)
+            coordinates=Oral.key_coordinates(basis,delta,mapping,groups,Oral.baked_shapes(rig,recipe,oral),static_eyes)
             key.data.foreach_set('co',np.asarray(coordinates,dtype=np.float32).ravel())
             key.slider_min=0;key.slider_max=1
-            for part in parts:part.add_recipe(name,recipe)
         if progress:progress.batch_step('绑定口腔与牙齿',0,0)
-        Oral.create(output,rig,parts)
-        output[A.TAG]=True;output['ek_transfer_target']=target;output['ek_oral_motion_version']=2
+        # The complete oral pose travels with the shape keys, including when
+        # copying/exporting them without an auxiliary armature.
+        for prop in ('ek_oral_armature','ek_oral_poses','ek_oral_bone_groups'):
+            if prop in output:del output[prop]
+        output[A.TAG]=True;output['ek_transfer_target']=target;output['ek_oral_motion_version']=3
         Commit.record(output,binding)
     except Exception:
         armature=output.get('ek_oral_armature')
@@ -265,7 +266,7 @@ def preview_curves(target,partition,collection,process_lashes=None,progress=None
         basis=rig.points[mapping].copy();static=json.loads(output['ek_static_eye_vertices'])
         for kind,ids in groups.items():basis[ids]=(rig.cavity_points if kind.startswith('mouth_') else rig.original_points)[mapping[ids]]
         basis[static]=rig.original_points[mapping[static]]
-        coordinates=Oral.key_coordinates(basis,delta,mapping,groups,rig.last_oral_deformation,static)
+        coordinates=Oral.key_coordinates(basis,delta,mapping,groups,Oral.baked_shapes(rig,recipe,rig.last_oral_deformation),static)
         if not np.isfinite(coordinates).all():raise ValueError('曲线校正预览出现无效坐标，请检查控制点')
         output.data.vertices.foreach_set('co',np.asarray(coordinates,dtype=np.float32).ravel());output.data.update()
     except Exception:
@@ -309,7 +310,7 @@ def combine(target,partition,collection,output,name='组合表情',progress=None
     if progress:progress.batch_step('写入组合形态键',0,1,name)
     mapping=[v.value for v in output.data.attributes['ek_vertex_origin'].data]
     basis=np.array([v.co for v in output.data.shape_keys.reference_key.data])
-    coordinates=Oral.key_coordinates(basis,delta,mapping,json.loads(output['ek_oral_groups']),rig.last_oral_deformation,
+    coordinates=Oral.key_coordinates(basis,delta,mapping,json.loads(output['ek_oral_groups']),Oral.baked_shapes(rig,recipe,rig.last_oral_deformation),
                                      json.loads(output['ek_static_eye_vertices']))
     key=output.shape_key_add(name=name,from_mix=False)
     key.data.foreach_set('co',np.asarray(coordinates,dtype=np.float32).ravel())
