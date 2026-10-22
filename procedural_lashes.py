@@ -50,11 +50,21 @@ def clearance(obstacle,point):
     return None if hit is None else float(hit.y-point[1])
 
 
-def relax_lash_card(rest,edges,roots,target,initial,weld=True):
+def relax_lash_card(rest,edges,roots,target,initial,weld=True,stitches=()):
     """Locally rigid bending with fixed eyelid roots and unconstrained tips."""
     if not len(edges):return initial
     if weld:
         _,first,mapping=np.unique(np.round(rest/1e-8).astype(np.int64),axis=0,return_index=True,return_inverse=True)
+        # Authored seam aliases can differ by a few float32 ULPs. Use the
+        # rig's geometric stitches as well as exact coordinate buckets.
+        parent=np.arange(len(first))
+        def leader(i):
+            while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
+            return i
+        for group in stitches:
+            for i in group[1:]:parent[leader(mapping[i])]=leader(mapping[group[0]])
+        joined=np.array([leader(i) for i in mapping])
+        _,first,mapping=np.unique(joined,return_index=True,return_inverse=True)
         if len(first)<len(rest):
             joined=np.array(sorted({tuple(sorted((int(mapping[a]),int(mapping[b])))) for a,b in edges if mapping[a]!=mapping[b]}),dtype=int)
             fixed=np.unique(mapping[roots]);goals=np.array([target[mapping[roots]==i].mean(0) for i in fixed])
@@ -108,9 +118,51 @@ def relax_lash_card(rest,edges,roots,target,initial,weld=True):
     return posed
 
 
+def return_lash_tip_targets(rig,side,ids,edges,rest,posed,delta,recipe):
+    """Turn a hanging outer return toward the closing lower rim."""
+    closure=float(np.clip(recipe.get('eyes',{}).get(str(side),{}).get('closure',0.),0.,1.))
+    if closure<=0:return [],[]
+    width=rig.widths['EYE',side]
+    lower={k for k,i in enumerate(ids) if not is_upper(rig,side,int(i))}
+    neighbors=[set() for _ in ids]
+    for a,b in edges:neighbors[a].add(int(b));neighbors[b].add(int(a))
+    chain=[i for u,i in sorted({(u,i) for i,u,up in rig.rows['EYE',side] if not up or u<1e-7 or u>1-1e-7})]
+    if len(chain)<3:return [],[]
+    line=B.Line(rig.points[chain]);closed=(rig.points+delta)[chain]
+    tips=[];targets=[]
+    while lower:
+        component={lower.pop()};pending=list(component)
+        while pending:
+            for j in neighbors[pending.pop()]&lower:
+                lower.remove(j);component.add(j);pending.append(j)
+        boundary=sorted(set.union(*(neighbors[k] for k in component))-component)
+        if not boundary or len(component)<3:continue
+        local=np.array(sorted(component),dtype=int);anchor=rest[boundary].mean(0)
+        tip=int(local[np.argmax(np.linalg.norm(rest[local]-anchor,axis=1))])
+        source=rest[tip]-anchor;extent=np.ptp(rest[local],axis=0)
+        # Only the downward, inward-returning branch of an upper card qualifies.
+        # A lower band or an outward lifted spike must keep its own motion.
+        if (extent[2]<width*.06 or extent[0]>width*.35 or source[2]>=-width*.06
+                or source[0]*side>=0 or abs(source[2])<abs(source[0])*.6
+                or abs(anchor[0]-rig.info['plane'])<abs(line.sample(.5)[0]-rig.info['plane'])):continue
+        u=line.project(rest[tip])[0]
+        # Use the same material parameter on the posed lower lid; reprojecting
+        # on a closed rim would switch branches at the corner.
+        sample=lambda t:np.array([np.interp(t,line.parameters,closed[:,axis]) for axis in range(3)])
+        tangent=sample(min(1.,u+.05))-sample(max(0.,u-.05))
+        if np.linalg.norm(tangent[[0,2]])<width*1e-6:continue
+        if tangent[0]*side>0:tangent=-tangent
+        current=posed[tip]-posed[boundary].mean(0)
+        angle=np.arctan2(current[2],current[0])-np.arctan2(tangent[2],tangent[0])
+        angle=float(np.arctan2(np.sin(angle),np.cos(angle)))*closure
+        turn=np.asarray(Matrix.Rotation(angle,3,'Y'))
+        tips.append(tip);targets.append(posed[boundary].mean(0)+turn@current)
+    return tips,targets
+
+
 def follow_lash_sections(rig,delta,recipe):
     """Follow the lid smoothly while bounding strain on authored lifted tips."""
-    result=delta.copy();changed=0;units_count=0;bend_max=0.;follow_min=1.;root_error=0.
+    result=delta.copy();changed=0;units_count=0;bend_max=0.;follow_min=1.;root_error=0.;return_tips=0
     protected=rig.brows|rig.creases|getattr(rig,'upper_followers',set())
     for side_text in recipe.get('eyes',{}):
         side=int(side_text)
@@ -161,7 +213,13 @@ def follow_lash_sections(rig,delta,recipe):
             lookup={int(i):k for k,i in enumerate(ids)};selected=set(lookup)
             triangles=np.array([[lookup[i] for i in tri] for tri,f in rig.mesh_triangles if set(tri)<=selected],dtype=int).reshape((-1,3))
             edges=np.array(sorted({tuple(sorted((tri[k],tri[(k+1)%3]))) for tri in triangles for k in range(3)}),dtype=int)
-            candidate=relax_lash_card(rest,edges,roots,target,rigid)
+            stitches=[[lookup[i] for i in group if i in lookup] for group in getattr(rig,'lash_stitches',[])]
+            stitches=[group for group in stitches if len(group)>1]
+            candidate=relax_lash_card(rest,edges,roots,target,rigid,stitches=stitches)
+            tips,goals=return_lash_tip_targets(rig,side,ids,edges,rest,candidate,delta,recipe)
+            if tips:
+                candidate=relax_lash_card(rest,edges,np.r_[roots,tips],np.vstack((target,goals)),candidate,stitches=stitches)
+                return_tips+=len(tips)
             root_error=max(root_error,float(np.linalg.norm((candidate[roots]-target)[:,[0,2]],axis=1).max()))
             result[ids]=candidate-rest
             bend_max=max(bend_max,float(np.linalg.norm(candidate-rigid,axis=1).max()))
@@ -180,7 +238,7 @@ def follow_lash_sections(rig,delta,recipe):
             changed+=len(ids);units_count+=1
     return result,dict(lash_section_vertices=changed,lash_section_units=units_count,
                        lash_bend_max=bend_max,lash_bend_gain=follow_min if units_count else 0.,
-                       lash_root_attachment_error=root_error)
+                       lash_root_attachment_error=root_error,lash_return_tips=return_tips)
 
 
 def fit_rigid_contact(rig,delta,recipe):
