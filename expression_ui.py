@@ -5,6 +5,7 @@ import numpy as np
 from bpy_extras.io_utils import ImportHelper,ExportHelper
 from . import expression_rules as Rules,expression_authoring as Author,expression_runtime as Runtime
 from . import region_guides as G,region_session as S,procedural_rig as R
+from . import region_core as C
 
 
 METRICS=[(key,label,'') for key,label in zip(Rules.METRICS,('中心 X 比例','中心 Y 比例','中心 Z 比例','X 尺寸占比','Y 尺寸占比','Z 尺寸占比','弧长占比','宽高比','边界环数量','连通块数量','是否闭合','顶点数量'))]
@@ -15,7 +16,9 @@ class EKRULE_Node(bpy.types.PropertyGroup):
     name:bpy.props.StringProperty(name='曲线 ID')
     mode:bpy.props.EnumProperty(name='识别方式',items=[('GUIDE','已有校正曲线',''),('BOUNDARY','分区边界',''),('SECTION','分区截面',''),('DERIVED','引用另一曲线','')])
     kind:bpy.props.EnumProperty(name='控制部位',items=KINDS)
-    region:bpy.props.IntProperty(name='所属分区',default=0)
+    region:bpy.props.IntProperty(name='所属分区',default=0,options={'HIDDEN'})
+    region_number:bpy.props.IntProperty(name='所属分区',default=0,min=-1,max=6,
+        **C.region_number_accessors('region'))
     side:bpy.props.EnumProperty(name='左右侧',items=[('0','中间',''),('1','X 正侧',''),('-1','X 负侧','')])
     index:bpy.props.IntProperty(name='同类候选序号',default=0,min=0)
     reference:bpy.props.StringProperty(name='引用曲线 ID')
@@ -53,7 +56,9 @@ class EKRULE_Calculation(bpy.types.PropertyGroup):
 class EKRULE_Influence(bpy.types.PropertyGroup):
     name:bpy.props.StringProperty(name='所属规则 ID')
     curve:bpy.props.StringProperty(name='影响曲线 ID（可选）')
-    region:bpy.props.IntProperty(name='影响网格分区',default=0)
+    region:bpy.props.IntProperty(name='影响网格分区',default=0,options={'HIDDEN'})
+    region_number:bpy.props.IntProperty(name='影响网格分区',default=0,min=-1,max=6,
+        **C.region_number_accessors('region'))
     metric:bpy.props.EnumProperty(name='影响特点',items=METRICS)
     input_min:bpy.props.FloatProperty(name='输入下限',default=0.)
     input_max:bpy.props.FloatProperty(name='输入上限',default=1.)
@@ -89,7 +94,9 @@ class EKRULE_Value(bpy.types.PropertyGroup):
 
 class EKRULE_Mask(bpy.types.PropertyGroup):
     name:bpy.props.StringProperty(name='条件名称')
-    region:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2)
+    region:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2,options={'HIDDEN'})
+    region_number:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2,min=-2,max=6,
+        **C.region_number_accessors('region'))
     axis:bpy.props.EnumProperty(name='位置轴',items=[('0','X',''),('1','Y',''),('2','Z','')])
     minimum:bpy.props.FloatProperty(name='位置比例下限',default=0.,min=0,max=1)
     maximum:bpy.props.FloatProperty(name='位置比例上限',default=1.,min=0,max=1)
@@ -367,13 +374,13 @@ class EKRULE_PT_advanced(bpy.types.Panel):
             if s.mode in ('SIDE','FILTER'):l.prop_search(s,'relation_source',context.scene.exprkit_procedural,'expressions')
             if s.mode=='SIDE':l.prop(s,'relation_side')
             elif s.mode=='FILTER':
-                edit_list(l,s,'conditions','condition_index',('name','region','axis','minimum','maximum'))
+                edit_list(l,s,'conditions','condition_index',('name','region_number','axis','minimum','maximum'))
                 l.label(text='全部条件同时满足；边界自动平滑')
             else:edit_list(l,s,'terms','term_index',('name','weight'))
             l.label(text='子表情和组合不参与强制对称')
         else:l.prop(s,'page',expand=True)
         if s.mode=='CURVES' and s.page=='RECOGNIZE':
-            edit_list(l,s,'nodes','node_index',('name','mode','kind','region','side','index','reference','axis','position','offset'))
+            edit_list(l,s,'nodes','node_index',('name','mode','kind','region_number','side','index','reference','axis','position','offset'))
             l.label(text='位置比例、尺寸占比与拓扑条件')
             edit_list(l,s,'criteria','criterion_index',('name','metric','reference','minimum','maximum'))
             button(l,'RECOGNIZE','显示识别曲线')
@@ -381,7 +388,7 @@ class EKRULE_PT_advanced(bpy.types.Panel):
             edit_list(l,s,'calculations','calculation_index',('name','source','target_ref','target_rule','shift','amount','parameter','original_curve','target_curve'))
             button(l,'RULE_CURVES','创建原始与目标曲线供编辑')
             l.label(text='其他曲线或网格特点的影响')
-            edit_list(l,s,'influences','influence_index',('name','curve','region','metric','input_min','input_max','output_min','output_max'))
+            edit_list(l,s,'influences','influence_index',('name','curve','region_number','metric','input_min','input_max','output_min','output_max'))
         elif s.mode=='CURVES':edit_list(l,s,'parameters','parameter_index',('name','label','minimum','maximum','default','exposed'))
         l.label(text='沿用防穿插、附着和防翻折约束',icon='LOCKED')
         l.operator('exprkit_rules.export',text='导出全部规则表格与 JSON')

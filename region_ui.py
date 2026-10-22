@@ -142,7 +142,10 @@ class EKREG_Settings(bpy.types.PropertyGroup):
     normal_min: bpy.props.FloatProperty(name='法线相似下限', default=0.15, min=-1, max=1)
     reverse_target: bpy.props.BoolProperty(name='目标法线反向', default=False)
     manual_label: bpy.props.IntProperty(name='手动分区编号', default=-1, min=-1,
-                                      description='分区编号；12 舌头，-1 无对应',update=focus_changed)
+                                      options={'HIDDEN'},update=focus_changed)
+    manual_number: bpy.props.IntProperty(name='手动分区编号',default=-1,min=-1,max=6,
+        description='0 面部，1 眉睫，2 瞳孔与高光，3 眼白，4 口腔，5 牙齿，6 舌头，-1 不参与表情',
+        **region_core.region_number_accessors('manual_label'))
     focus_region:bpy.props.BoolProperty(name='优先显示目前分区',default=False,update=focus_changed,
         description='当前编号的分区以 95% 不透明度透过显示；其他分区以 15% 不透明度显示并保留深度遮挡，仅影响工作副本视口')
     focus_object:bpy.props.PointerProperty(type=bpy.types.Object)
@@ -772,16 +775,12 @@ class EKREG_PT_correct(bpy.types.Panel):
         layout.operator('exprkit_regions.colors')
         layout.label(text='彩色：已对应；灰色：无对应')
         layout.label(text='编辑模式选面后，可修改分区')
-        layout.prop(s, 'manual_label')
+        layout.prop(s, 'manual_number')
         layout.prop(s,'focus_region')
         if s.manual_label in (8,9):layout.prop(s,'oral_group')
-        reference=s.standard if s.use_standard else s.working_source
-        if s.preview.get('ek_standard_slot_labels') or (reference and reference.get('ek_standard_slot_labels')):
-            layout.label(text='0 面部 · 2 眉睫 · 3 瞳孔与高光')
-            layout.label(text='7 眼白 · 8 口腔 · 9 牙齿 · 12 舌头')
-        else:
-            layout.label(text='编号对应源材质槽')
-        layout.label(text='-1 无对应')
+        layout.label(text='0 面部 · 1 眉睫 · 2 瞳孔与高光')
+        layout.label(text='3 眼白 · 4 口腔 · 5 牙齿 · 6 舌头')
+        layout.label(text='-1 不参与表情')
         layout.operator('exprkit_regions.manual', text='将所选面标记到此分区')
         mirror = disclosure(layout, s, 'show_mirror', '半脸同步')
         if mirror is not None:

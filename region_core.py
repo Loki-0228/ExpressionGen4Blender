@@ -20,6 +20,24 @@ def canonical_region(label):
     return 3 if label==5 else label
 
 
+REGION_UI_NUMBERS={label:number for number,label in enumerate((0,2,3,7,8,9,12))}
+REGION_UI_NUMBERS.update({-1:-1,-2:-2})
+REGION_FROM_UI_NUMBER={number:label for label,number in REGION_UI_NUMBERS.items()}
+
+
+def region_number_accessors(attribute):
+    """Expose consecutive numbers while retaining saved semantic IDs.
+
+    Both older .blend properties and JSON rules keep the same meaning. The
+    visible number is a view of that stored field, never a second label set.
+    """
+    def get(settings):
+        return REGION_UI_NUMBERS.get(canonical_region(getattr(settings,attribute)),-1)
+    def set(settings,value):
+        setattr(settings,attribute,REGION_FROM_UI_NUMBER[value])
+    return dict(get=get,set=set)
+
+
 def exact_material_region(name):
     """Recognize current marker names and canonical material names."""
     name = re.sub(r'(\.\d{3})+$', '', name or '').strip()

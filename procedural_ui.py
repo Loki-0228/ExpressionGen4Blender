@@ -72,7 +72,7 @@ class EKPROC_Settings(bpy.types.PropertyGroup):
     process_lashes:bpy.props.BoolProperty(name='单独处理单根睫毛',default=True,
         description='生成曲线时识别单根睫毛；生成表情时只让当前有曲线标记的单根睫毛独立形变。没有标记或关闭时随整体眼睑移动')
     kind:bpy.props.EnumProperty(name='显示部位',items=[('ALL','全部','')]+[(k,v,'') for k,v in G.KINDS.items()])
-    label:bpy.props.EnumProperty(name='所选面分区',items=[('0','Face 面部',''),('2','眉毛与睫毛',''),('3','瞳孔与高光',''),('7','眼白',''),('8','口腔（自动上下组）',''),('9','牙齿（自动上下组）',''),('12','舌头',''),('-1','不参与',''),('81','上口腔',''),('82','下口腔',''),('91','上牙',''),('92','下牙','')])
+    label:bpy.props.EnumProperty(name='所选面分区',items=[('0','0 · 面部',''),('2','1 · 眉毛与睫毛',''),('3','2 · 瞳孔与高光',''),('7','3 · 眼白',''),('8','4 · 口腔（自动上下组）',''),('9','5 · 牙齿（自动上下组）',''),('12','6 · 舌头',''),('-1','-1 · 不参与表情',''),('81','4 · 上口腔',''),('82','4 · 下口腔',''),('91','5 · 上牙',''),('92','5 · 下牙','')])
     force_symmetry:bpy.props.BoolProperty(name='强制左右对称',default=False,
         description='将 X 正侧完成约束后的坐标镜像到负侧；可复用的眼眉仅计算正侧。子表情、组合及特殊表情保持定义；无法配对的活动顶点会阻止该表情输出')
     compute_backend:bpy.props.EnumProperty(name='计算设备',items=[('AUTO','自动 GPU','可用时用 NVIDIA CUDA 加速三角面接触；小任务或不可用时自动回退 CPU'),('CPU','CPU','仅使用 CPU 计算')],default='AUTO')
