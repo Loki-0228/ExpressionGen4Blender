@@ -28,6 +28,9 @@ def baked_shapes(rig,recipe,shapes):
     from .procedural_cavity import part_pose
     result={kind:value.copy() for kind,value in shapes.items()}
     for kind in rig.oral_parts:
+        # Lining already contains its final lip-attached motion. Only teeth
+        # store a residual deformation before the rigid jaw pose.
+        if not kind.startswith('teeth_'):continue
         ids,center,rotation,translation=part_pose(rig,recipe,kind)
         rest=rig.cavity_points if kind.startswith('mouth_') else rig.original_points
         shape=result.setdefault(kind,np.zeros_like(rig.points))

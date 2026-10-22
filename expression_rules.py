@@ -122,7 +122,22 @@ def _builtin_profile():
             for branch,values in recipe['mouth_reference'].items():
                 motion=np.asarray(values)-np.asarray(neutral[branch]);u=np.linspace(0,1,len(motion))
                 recipe['mouth'][branch]=np.column_stack([np.interp(t,u,motion[:,axis]) for axis in range(3)]).tolist()
-    data['feedback_revision']=40
+    # Tone down the complete action, including dental travel, so the lining
+    # and teeth remain compatible with the smaller lip aperture.
+    for recipe in data['recipes']:
+        gain={'あ２':.70,'い１':.85,'い２':.85}.get(recipe['name'])
+        if gain is None:continue
+        for branch,values in recipe.get('mouth_reference',{}).items():
+            rest=np.asarray(data['mouth_reference_basis'][branch])
+            recipe['mouth_reference'][branch]=(rest+gain*(np.asarray(values)-rest)).tolist()
+        for branch,values in recipe.get('mouth',{}).items():
+            recipe['mouth'][branch]=(np.asarray(values)*gain).tolist()
+        for pose in recipe.get('oral',{}).values():
+            if 'translation' in pose:pose['translation']=(np.asarray(pose['translation'])*gain).tolist()
+            if 'rotation' in pose:
+                u,_,vh=np.linalg.svd(np.eye(3)+gain*(np.asarray(pose['rotation'])-np.eye(3)))
+                pose['rotation']=(u@vh).tolist()
+    data['feedback_revision']=45
     return data
 
 

@@ -678,8 +678,8 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     delta,rig.last_oral_deformation,oral_quality=Contacts.finish(rig,delta,recipe,rig.last_oral_deformation)
     quality.update(oral_quality)
     if 'jaw' in recipe and not any(recipe.get(k) for k in ('eyes','mouth','mouth_targets','brows','oral','tongue','custom_rules')):
-        # A contour-only jaw key leaves the complete closed mouth and oral
-        # interior at Basis, including incidental contact/neutral corrections.
+        # Start the jaw pull at Basis, without incidental opening/contact
+        # corrections. jaw_contour supplies the coherent muscle movement.
         delta=np.zeros_like(delta)
         rig.last_oral_deformation={kind:np.zeros_like(value) for kind,value in rig.last_oral_deformation.items()}
     delta=Lips.jaw_contour(rig,delta,recipe)
@@ -687,6 +687,7 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     if followers is not None:
         delta=followers.apply(delta)
         quality['face_follower_vertices']=len(followers.vertices)
+    rig.last_oral_deformation=Cavity.reattach(rig,delta,rig.last_oral_deformation)
     # The crease-follow pass can move Face-labelled strips after the earlier
     # skin repair. Report the finished mesh too, not only that earlier stage.
     final_area,rest_area=Q.minimum_areas(points,delta,rig.field.triangles)

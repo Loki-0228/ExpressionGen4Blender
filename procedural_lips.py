@@ -20,7 +20,7 @@ def closed_reference(recipe):
 
 
 def jaw_contour(rig,delta,recipe):
-    """Adjust chin and cheeks while leaving the mouth collar in its pose."""
+    """Adjust chin and cheeks with a gentle coherent inward lip pull."""
     if 'jaw' not in recipe or ('LIP',0) not in rig.rows:return delta
     points=rig.points;width=rig.widths['LIP',0];center=np.asarray(rig.info['mouth'].frame.center)
     rim=sorted({i for i,u,up in rig.rows['LIP',0]})
@@ -34,6 +34,13 @@ def jaw_contour(rig,delta,recipe):
     movement=np.asarray(recipe['jaw'])*width
     result=delta.copy();result+=weight[:,None]*movement
     result[:,0]-=weight*x*abs(movement[2])*.35
+    # The same affine pull on both lips retains closure and the authored
+    # bevel. Fade through the surrounding skin instead of moving only a rim.
+    collar=np.clip(1-distance/.65,0,1);collar=collar*collar*(3-2*collar)
+    collar[[i for i,m in enumerate(rig.members) if 0 not in m]]=0
+    strength=min(float(np.linalg.norm(movement))/width,.25)
+    result[:,0]-=collar*(points[:,0]-center[0])*strength*.35
+    result[:,1]+=collar*width*strength*.12
     return result
 
 

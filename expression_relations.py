@@ -103,6 +103,7 @@ class Solver:
             quality.update(Lashes.audit_attachment(self.rig,delta,effective))
             quality.update(Lashes.audit_connections(self.rig,delta))
             quality.update(Lashes.audit_closed_band(self.rig,delta,effective))
+            shapes=C.reattach(self.rig,delta,shapes)
             result=delta,effective,shapes,quality,Custom.capture_curves(self.rig,delta)
             self.cache[key]=result
             self.rig.last_oral_deformation=result[2];self.rig.last_expression_curves=result[4]
