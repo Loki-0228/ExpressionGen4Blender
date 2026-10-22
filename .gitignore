@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+/models/
+/tests/
+/tools/
+/dist/
+/feedback/
+/experiments/
+/backups/
+/region_direct.py
+/native/build.cmd
+/native/*.obj
+/native/*.lib
+/native/*.exp
+/docs/无源表情生成方案.txt

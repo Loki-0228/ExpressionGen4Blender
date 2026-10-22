@@ -1,0 +1,7 @@
+# 保留插件安装包中的原始文件字节。
+* -text
+*.dll binary
+
+# GitHub Source code ZIP 只包含可安装的插件文件。
+/.gitignore export-ignore
+/.gitattributes export-ignore

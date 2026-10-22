@@ -1,0 +1,225 @@
+{
+  "version": "1.0",
+  "name": "Cross-Format Expression Kit",
+  "description": "把参考模型的原生表情原子（atoms）组合成一套跨格式通用的标准表情（expressions）。同一份 recipes 可输出 PMX / VRM / Blender / FBX 四种格式。",
+  "conventions": {
+    "wink_side": {
+      "rule": "ウィンク = モデルの右目を閉じる（画面から見て左側）。ウィンク２ = モデルの左目。",
+      "verify": "参考模型原子名里的 _L / _R 是「模型自身的左右」还是「观察者的左右」尚未实证。导入后请先单独拉满 Eye_Wink01_L 看是哪只眼闭上；若与 MMD 惯例相反，把 wink / wink2 两条的 atom 互换即可。",
+      "switch": "swap_wink_sides"
+    },
+    "left_right_axis": {
+      "rule": "PMX/MMD 中模型面向 -Z，模型左手在 +X。",
+      "note": "VRM 1.0 的 blinkLeft/blinkRight 指的是 avatar 自身的左右眼。"
+    },
+    "vrm_custom_prefix": "vrm 字段以 \"custom:\" 开头的表示 VRM 1.0 没有对应预设，需要用自定义表情名。"
+  },
+  "formats": {
+    "pmx": {
+      "primary_name_field": "mmd",
+      "secondary_name_field": "mmd_en",
+      "implementation": "group morph（形態鍵タイプ0），parts 作为子项写入；原子保留原名放在「その他」枠",
+      "panel_map": { "eyebrow": "眉", "eye": "目", "mouth": "口", "other": "その他" }
+    },
+    "vrm": {
+      "primary_name_field": "vrm",
+      "implementation": "VRM 1.0 expressions：预设名直接用，custom: 前缀的改用自定义名；bind 指向目标模型对应的 blendshape index",
+      "note": "VRM 1.0 预设只有 happy/angry/sad/relaxed/surprised/aa/ih/ou/ee/oh/blink/blinkLeft/blinkRight/lookUp/lookDown/lookLeft/lookRight/neutral 这 18 个，其余必须走 custom。"
+    },
+    "blender": {
+      "primary_name_field": "mmd",
+      "implementation": "shape key 重命名 + 用 driver/自定义属性把 parts 组合成群组表情；同时写 ARKit 别名到 shape key 的 vertex group 或自定义属性",
+      "note": "Blender 没有 group shape key，需要靠 driver 或 bake 成新 shape key。脚本默认 bake。"
+    },
+    "fbx": {
+      "primary_name_field": "mmd",
+      "implementation": "把 BlendShapeChannel 名称改成标准名；parts 需要预先在 DCC 里合成为单一 shape key 后才能一一对应，或保留原子名 + 另出一份 rename map",
+      "note": "FBX 的 blendshape 是 per-mesh 的，跨网格（眉/眼/口分属不同 mesh）的群组表情无法用单个 channel 表达，脚本默认输出 rename map。"
+    }
+  },
+  "expressions": [
+    { "id": "blink", "mmd": "まばたき", "mmd_en": "Blink", "zh": "眨眼", "panel": "eye",
+      "vrm": "blink", "arkit": ["eyeBlinkLeft", "eyeBlinkRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_wink01_L", "w": 1.0 }, { "atom": "eye_wink01_R", "w": 1.0 } ] },
+
+    { "id": "wink", "mmd": "ウィンク", "mmd_en": "Wink", "zh": "单眼眨（模型右眼）", "panel": "eye",
+      "vrm": "blinkRight", "arkit": ["eyeBlinkRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_wink01_R", "w": 1.0 } ] },
+
+    { "id": "wink2", "mmd": "ウィンク２", "mmd_en": "Wink2", "zh": "单眼眨（模型左眼）", "panel": "eye",
+      "vrm": "blinkLeft", "arkit": ["eyeBlinkLeft"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_wink01_L", "w": 1.0 } ] },
+
+    { "id": "eye_half", "mmd": "半目", "mmd_en": "HalfLid", "zh": "半睁眼", "panel": "eye",
+      "vrm": "custom:halfLid", "arkit": ["eyeSquintLeft", "eyeSquintRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_half", "w": 1.0 } ] },
+
+    { "id": "jitome", "mmd": "じと目", "mmd_en": "Jitome", "zh": "冷淡眼", "panel": "eye",
+      "vrm": "custom:jitome", "arkit": ["eyeSquintLeft", "eyeSquintRight", "browDownLeft", "browDownRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_half", "w": 1.0 }, { "atom": "brow_serious", "w": 0.6 } ] },
+
+    { "id": "smile", "mmd": "笑い", "mmd_en": "Smile", "zh": "笑（闭眼）", "panel": "eye",
+      "vrm": "happy", "arkit": ["eyeBlinkLeft", "eyeBlinkRight", "mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_wink02_L", "w": 1.0 }, { "atom": "eye_wink02_R", "w": 1.0 }, { "atom": "mouth_laugh", "w": 1.0 } ] },
+
+    { "id": "niccori", "mmd": "にっこり", "mmd_en": "Niccori", "zh": "微笑", "panel": "mouth",
+      "vrm": "happy", "arkit": ["mouthSmileLeft", "mouthSmileRight", "cheekSquintLeft", "cheekSquintRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_smile", "w": 1.0 }, { "atom": "eye_half", "w": 0.5 } ] },
+
+    { "id": "niyari", "mmd": "にやり", "mmd_en": "Niyari", "zh": "坏笑", "panel": "mouth",
+      "vrm": "relaxed", "arkit": ["mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_smile", "w": 0.8 }, { "atom": "eye_half", "w": 0.5 }, { "atom": "brow_smily", "w": 0.6 } ] },
+
+    { "id": "laugh", "mmd": "大笑い", "mmd_en": "Laugh", "zh": "大笑", "panel": "mouth",
+      "vrm": "happy", "arkit": ["jawOpen", "mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_laugh", "w": 1.0 }, { "atom": "eye_wink02_L", "w": 1.0 }, { "atom": "eye_wink02_R", "w": 1.0 } ] },
+
+    { "id": "a", "mmd": "あ", "mmd_en": "A", "zh": "あ 口型", "panel": "mouth",
+      "vrm": "aa", "arkit": ["jawOpen"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_a", "w": 1.0 } ] },
+
+    { "id": "i", "mmd": "い", "mmd_en": "I", "zh": "い 口型", "panel": "mouth",
+      "vrm": "ih", "arkit": ["mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_i", "w": 1.0 } ] },
+
+    { "id": "u", "mmd": "う", "mmd_en": "U", "zh": "う 口型", "panel": "mouth",
+      "vrm": "ou", "arkit": ["mouthPucker"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_u", "w": 1.0 } ] },
+
+    { "id": "e", "mmd": "え", "mmd_en": "E", "zh": "え 口型", "panel": "mouth",
+      "vrm": "ee", "arkit": ["mouthStretchLeft", "mouthStretchRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_e", "w": 1.0 } ] },
+
+    { "id": "o", "mmd": "お", "mmd_en": "O", "zh": "お 口型", "panel": "mouth",
+      "vrm": "oh", "arkit": ["mouthFunnel"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_o", "w": 1.0 } ] },
+
+    { "id": "n", "mmd": "ん", "mmd_en": "N", "zh": "ん 口型", "panel": "mouth",
+      "vrm": "custom:n", "arkit": ["mouthClose"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_n", "w": 1.0 } ] },
+
+    { "id": "o2", "mmd": "お２", "mmd_en": "O2", "zh": "お 口型（备用形状）", "panel": "mouth",
+      "vrm": "custom:o2", "arkit": ["mouthFunnel"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_o2", "w": 1.0 } ] },
+
+    { "id": "surprised", "mmd": "びっくり", "mmd_en": "Surprised", "zh": "惊讶", "panel": "eye",
+      "vrm": "surprised", "arkit": ["browInnerUp", "eyeWideLeft", "eyeWideRight", "jawOpen"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_surprised", "w": 1.0 }, { "atom": "mouth_o2", "w": 0.8 }, { "atom": "brow_up", "w": 0.6 } ] },
+
+    { "id": "surprise_s", "mmd": "驚き小", "mmd_en": "SurprisedSmall", "zh": "小惊讶", "panel": "eye",
+      "vrm": "custom:surprisedSmall", "arkit": ["eyeWideLeft", "eyeWideRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_surprised03", "w": 1.0 }, { "atom": "mouth_o", "w": 0.5 } ] },
+
+    { "id": "troubled", "mmd": "困る", "mmd_en": "Troubled", "zh": "为难", "panel": "eyebrow",
+      "vrm": "sad", "arkit": ["browInnerUp", "mouthFrownLeft", "mouthFrownRight"], "arkit_exact": false,
+      "parts": [ { "atom": "brow_trouble", "w": 1.0 }, { "atom": "mouth_line02", "w": 0.8 } ] },
+
+    { "id": "angry", "mmd": "怒り", "mmd_en": "Angry", "zh": "生气", "panel": "eyebrow",
+      "vrm": "angry", "arkit": ["browDownLeft", "browDownRight", "mouthFrownLeft", "mouthFrownRight"], "arkit_exact": false,
+      "parts": [ { "atom": "brow_angry", "w": 1.0 }, { "atom": "mouth_angry", "w": 1.0 } ] },
+
+    { "id": "shy", "mmd": "照れ", "mmd_en": "Shy", "zh": "害羞", "panel": "eyebrow",
+      "vrm": "relaxed", "arkit": ["cheekSquintLeft", "cheekSquintRight", "mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "brow_shy", "w": 1.0 }, { "atom": "eye_care", "w": 0.7 }, { "atom": "mouth_smile", "w": 0.4 } ] },
+
+    { "id": "shy2", "mmd": "照れ２", "mmd_en": "Shy2", "zh": "害羞（强）", "panel": "eyebrow",
+      "vrm": "relaxed", "arkit": ["cheekSquintLeft", "cheekSquintRight"], "arkit_exact": false,
+      "parts": [ { "atom": "brow_shy02", "w": 1.0 }, { "atom": "eye_care", "w": 1.0 }, { "atom": "mouth_smile", "w": 0.5 } ] },
+
+    { "id": "tears", "mmd": "涙", "mmd_en": "Tears", "zh": "含泪", "panel": "eye",
+      "vrm": "custom:tears", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "eye_wail", "w": 0.8 }, { "atom": "eye_highlight_down", "w": 0.5 } ] },
+
+    { "id": "cry", "mmd": "泣き", "mmd_en": "Crying", "zh": "哭", "panel": "eye",
+      "vrm": "sad", "arkit": ["browInnerUp", "mouthFrownLeft", "mouthFrownRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_wail", "w": 1.0 }, { "atom": "brow_trouble", "w": 0.8 }, { "atom": "mouth_line01", "w": 0.5 } ] },
+
+    { "id": "nagomi", "mmd": "なごみ", "mmd_en": "Nagomi", "zh": "温柔祥和", "panel": "eye",
+      "vrm": "relaxed", "arkit": ["cheekSquintLeft", "cheekSquintRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_care", "w": 1.0 }, { "atom": "mouth_smile", "w": 0.5 } ] },
+
+    { "id": "star", "mmd": "星目", "mmd_en": "StarEyes", "zh": "星星眼", "panel": "eye",
+      "vrm": "custom:starEyes", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "eye_circle", "w": 1.0 } ] },
+
+    { "id": "heart", "mmd": "ハート目", "mmd_en": "HeartEyes", "zh": "爱心眼", "panel": "eye",
+      "vrm": "custom:heartEyes", "arkit": [], "arkit_exact": false,
+      "parts": [], "unsupported": "参考模型没有对应原子（FBX 里不存在 heart 目标）" },
+
+    { "id": "look_up", "mmd": "上", "mmd_en": "LookUp", "zh": "向上看", "panel": "eye",
+      "vrm": "lookUp", "arkit": ["eyeLookUpLeft", "eyeLookUpRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_look_up", "w": 1.0 } ] },
+
+    { "id": "look_down", "mmd": "下", "mmd_en": "LookDown", "zh": "向下看", "panel": "eye",
+      "vrm": "lookDown", "arkit": ["eyeLookDownLeft", "eyeLookDownRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_look_down", "w": 1.0 } ] },
+
+    { "id": "look_left", "mmd": "左", "mmd_en": "LookLeft", "zh": "向左看", "panel": "eye",
+      "vrm": "lookLeft", "arkit": ["eyeLookOutLeft", "eyeLookInRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_look_left", "w": 1.0 } ] },
+
+    { "id": "look_right", "mmd": "右", "mmd_en": "LookRight", "zh": "向右看", "panel": "eye",
+      "vrm": "lookRight", "arkit": ["eyeLookInLeft", "eyeLookOutRight"], "arkit_exact": true,
+      "parts": [ { "atom": "eye_look_right", "w": 1.0 } ] },
+
+    { "id": "look_close", "mmd": "寄り目", "mmd_en": "CrossEyes", "zh": "斗鸡眼", "panel": "eye",
+      "vrm": "custom:crossEyes", "arkit": ["eyeLookInLeft", "eyeLookInRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_look_close", "w": 1.0 } ] },
+
+    { "id": "highlight_off", "mmd": "ハイライト消", "mmd_en": "HighlightOff", "zh": "关闭眼高光", "panel": "eye",
+      "vrm": "custom:highlightOff", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "eye_highlight_off", "w": 1.0 } ] },
+
+    { "id": "serious", "mmd": "真面目", "mmd_en": "Serious", "zh": "认真", "panel": "eyebrow",
+      "vrm": "custom:serious", "arkit": ["browDownLeft", "browDownRight", "mouthClose"], "arkit_exact": false,
+      "parts": [ { "atom": "brow_serious", "w": 1.0 }, { "atom": "mouth_line01", "w": 0.8 } ] },
+
+    { "id": "mouth_corner_up", "mmd": "口角上げ", "mmd_en": "MouthCornerUp", "zh": "嘴角上扬", "panel": "mouth",
+      "vrm": "custom:mouthCornerUp", "arkit": ["mouthSmileLeft", "mouthSmileRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_smile", "w": 1.0 } ] },
+
+    { "id": "mouth_corner_down", "mmd": "口角下げ", "mmd_en": "MouthCornerDown", "zh": "嘴角下垂", "panel": "mouth",
+      "vrm": "custom:mouthCornerDown", "arkit": ["mouthFrownLeft", "mouthFrownRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_line02", "w": 1.0 } ] },
+
+    { "id": "contempt", "mmd": "軽蔑", "mmd_en": "Contempt", "zh": "轻蔑", "panel": "eye",
+      "vrm": "custom:contempt", "arkit": ["eyeSquintLeft", "eyeSquintRight", "mouthSmileLeft"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_contempt", "w": 1.0 }, { "atom": "mouth_line01", "w": 0.6 } ] },
+
+    { "id": "hostility", "mmd": "敵意", "mmd_en": "Hostility", "zh": "敌意", "panel": "eye",
+      "vrm": "custom:hostility", "arkit": ["browDownLeft", "browDownRight", "eyeSquintLeft", "eyeSquintRight"], "arkit_exact": false,
+      "parts": [ { "atom": "eye_hostility", "w": 1.0 }, { "atom": "brow_angry", "w": 0.7 } ] },
+
+    { "id": "tongue_out", "mmd": "舌出し", "mmd_en": "TongueOut", "zh": "吐舌", "panel": "other",
+      "vrm": "custom:tongueOut", "arkit": ["tongueOut"], "arkit_exact": true,
+      "parts": [ { "atom": "tongue_up", "w": 1.0 }, { "atom": "mouth_o", "w": 0.5 } ] },
+
+    { "id": "tongue_in", "mmd": "舌引っ込み", "mmd_en": "TongueIn", "zh": "收舌", "panel": "other",
+      "vrm": "custom:tongueIn", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "tongue_down", "w": 1.0 } ] },
+
+    { "id": "cat_mouth", "mmd": "猫口", "mmd_en": "CatMouth", "zh": "猫嘴", "panel": "mouth",
+      "vrm": "custom:catMouth", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_opencat", "w": 1.0 } ] },
+
+    { "id": "shout", "mmd": "叫び", "mmd_en": "Shout", "zh": "喊叫", "panel": "mouth",
+      "vrm": "custom:shout", "arkit": ["jawOpen", "mouthStretchLeft", "mouthStretchRight"], "arkit_exact": false,
+      "parts": [ { "atom": "mouth_wave", "w": 1.0 }, { "atom": "eye_surprised02", "w": 0.5 } ] },
+
+    { "id": "broken_eye", "mmd": "壊れ目", "mmd_en": "BrokenEye", "zh": "崩坏眼", "panel": "eye",
+      "vrm": "custom:brokenEye", "arkit": [], "arkit_exact": false,
+      "parts": [ { "atom": "eye_broken", "w": 1.0 } ] },
+
+    { "id": "brow_up", "mmd": "眉上げ", "mmd_en": "BrowUp", "zh": "挑高眉", "panel": "eyebrow",
+      "vrm": "custom:browUp", "arkit": ["browOuterUpLeft", "browOuterUpRight"], "arkit_exact": true,
+      "parts": [ { "atom": "brow_up", "w": 1.0 } ] },
+
+    { "id": "brow_down", "mmd": "眉下げ", "mmd_en": "BrowDown", "zh": "压低眉", "panel": "eyebrow",
+      "vrm": "custom:browDown", "arkit": ["browDownLeft", "browDownRight"], "arkit_exact": true,
+      "parts": [ { "atom": "brow_down", "w": 1.0 } ] },
+
+    { "id": "neutral", "mmd": "素の表情", "mmd_en": "Neutral", "zh": "无表情", "panel": "other",
+      "vrm": "neutral", "arkit": [], "arkit_exact": true,
+      "parts": [] }
+  ]
+}

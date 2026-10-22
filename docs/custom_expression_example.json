@@ -1,0 +1,80 @@
+{
+  "format": "ExpressionGen.expression_rules",
+  "schema_version": 1,
+  "engine": "curve_rules_v1",
+  "expressions": [
+    {
+      "name": "轻微眯眼示例",
+      "family": "custom",
+      "solver": "curve_rules_v1",
+      "base": "",
+      "constraints": [
+        "face_fold",
+        "eye_depth",
+        "eyelid_direction",
+        "lash_attachment",
+        "closed_seam",
+        "lip_order",
+        "cavity_attachment",
+        "teeth_follow",
+        "tongue_exit"
+      ],
+      "parameters": [
+        {
+          "id": "amount",
+          "label": "眯眼程度",
+          "min": 0,
+          "max": 1,
+          "default": 1,
+          "exposed": true
+        }
+      ],
+      "recognizers": [
+        {
+          "id": "upper",
+          "mode": "GUIDE",
+          "kind": "EYE_UPPER",
+          "region": 0,
+          "side": 1,
+          "index": 0,
+          "criteria": []
+        },
+        {
+          "id": "lower",
+          "mode": "GUIDE",
+          "kind": "EYE_LOWER",
+          "region": 0,
+          "side": 1,
+          "index": 0,
+          "criteria": [
+            {
+              "metric": "span_x",
+              "reference": "upper",
+              "min": 0.4,
+              "max": 2.0
+            }
+          ]
+        }
+      ],
+      "rules": [
+        {
+          "id": "approach",
+          "source": "upper",
+          "target_curve": "lower",
+          "amount": 0.12,
+          "parameter": "amount",
+          "influences": [
+            {
+              "curve": "lower",
+              "metric": "length",
+              "input_min": 0.6,
+              "input_max": 1.8,
+              "output_min": 0.6,
+              "output_max": 1.0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
