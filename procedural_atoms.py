@@ -678,6 +678,10 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     from . import procedural_contacts as Contacts
     delta,rig.last_oral_deformation,oral_quality=Contacts.finish(rig,delta,recipe,rig.last_oral_deformation)
     quality.update(oral_quality)
+    followers=getattr(rig,'face_followers',None)
+    if followers is not None:
+        delta=followers.apply(delta)
+        quality['face_follower_vertices']=len(followers.vertices)
     # The crease-follow pass can move Face-labelled strips after the earlier
     # skin repair. Report the finished mesh too, not only that earlier stage.
     final_area,rest_area=Q.minimum_areas(points,delta,rig.field.triangles)

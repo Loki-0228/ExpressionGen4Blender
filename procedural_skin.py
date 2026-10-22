@@ -1,9 +1,72 @@
-"""Local eye motion with smooth transitions along connected face topology."""
+"""Connected facial skin and synchronized disconnected Face layers."""
 from collections import Counter
 import heapq
 import numpy as np
 from .region_deformation import SkinDisplacementField
 from . import procedural_binding as Binding
+
+
+class FaceFollowers:
+    """Bind disconnected Face layers to the skin carrying facial controls.
+
+    Transfer final displacement, retaining each layer's original offset and
+    tessellation. All explicitly marked Face islands participate, including
+    full-size face overlays; other partitions never become followers.
+    """
+    def __init__(self,points,triangles,controls):
+        from mathutils import Vector
+        from mathutils.bvhtree import BVHTree
+        self.vertices=np.empty(0,dtype=np.int32)
+        self.triangles=np.empty((0,3),dtype=np.int32)
+        self.weights=np.empty((0,3),dtype=float)
+        points=np.asarray(points,dtype=float)
+        triangles=np.asarray(triangles,dtype=np.int32).reshape((-1,3))
+        if not len(triangles):return
+        parent={int(i):int(i) for i in triangles.ravel()}
+        def root(i):
+            while parent[i]!=i:
+                parent[i]=parent[parent[i]];i=parent[i]
+            return i
+        for a,b,c in triangles:
+            a=root(int(a));parent[root(int(b))]=a;parent[root(int(c))]=a
+        groups={}
+        for i in parent:groups.setdefault(root(i),set()).add(i)
+        controls=set(controls)
+        hosts=set().union(*(ids for ids in groups.values() if ids&controls))
+        if not hosts:
+            # Custom-only rigs can have no eye or lip contour. Use geometric
+            # area, rather than vertex count, to identify their main skin.
+            areas={key:0. for key in groups}
+            for tri in triangles:
+                p=points[tri];areas[root(int(tri[0]))]+=float(np.linalg.norm(np.cross(p[1]-p[0],p[2]-p[0])))
+            hosts=groups[max(areas,key=areas.get)]
+        followers=sorted(set(parent)-hosts)
+        if not followers:return
+        source=[tri.tolist() for tri in triangles if int(tri[0]) in hosts
+                and np.linalg.norm(np.cross(points[tri[1]]-points[tri[0]],points[tri[2]]-points[tri[0]]))>0]
+        if not source:return
+        tree=BVHTree.FromPolygons([Vector(p) for p in points],source,all_triangles=True)
+        vertices=[];bound=[];weights=[]
+        for i in followers:
+            hit,normal,index,distance=tree.find_nearest(Vector(points[i]))
+            if index is None:continue
+            tri=source[index];a,b,c=points[tri];u=b-a;v=c-a;q=np.asarray(hit)-a
+            uu=float(u@u);uv=float(u@v);vv=float(v@v)
+            denominator=uu*vv-uv*uv
+            if denominator<=0:continue
+            s=(float(q@u)*vv-float(q@v)*uv)/denominator
+            t=(float(q@v)*uu-float(q@u)*uv)/denominator
+            weight=np.clip((1-s-t,s,t),0,1);weight/=weight.sum()
+            vertices.append(i);bound.append(tri);weights.append(weight)
+        self.vertices=np.asarray(vertices,dtype=np.int32)
+        self.triangles=np.asarray(bound,dtype=np.int32).reshape((-1,3))
+        self.weights=np.asarray(weights,dtype=float).reshape((-1,3))
+
+    def apply(self,delta):
+        result=delta.copy()
+        if len(self.vertices):
+            result[self.vertices]=np.einsum('ij,ijk->ik',self.weights,delta[self.triangles])
+        return result
 
 
 class EyelidSkin:

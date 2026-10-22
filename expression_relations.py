@@ -89,6 +89,14 @@ class Solver:
         self.stack.add(key)
         try:
             result=self.derived(recipe,weight) if recipe.get('relation') else self.independent(recipe,weight,allow_symmetry)
+            followers=getattr(self.rig,'face_followers',None)
+            if followers is not None and len(followers.vertices):
+                delta,effective,shapes,quality,curves=result
+                # Mirroring and filtered combinations may alter the finished
+                # host after its solve. Keep every Face layer in that pose.
+                delta=followers.apply(delta)
+                quality=dict(quality,face_follower_vertices=len(followers.vertices))
+                result=delta,effective,shapes,quality,Custom.capture_curves(self.rig,delta)
             self.cache[key]=result
             self.rig.last_oral_deformation=result[2];self.rig.last_expression_curves=result[4]
             return result
