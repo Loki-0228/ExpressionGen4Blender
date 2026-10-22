@@ -51,9 +51,10 @@ def clearance(obstacle,point):
 
 
 def fit_rigid_contact(rig,delta,recipe):
-    """Fit finished lash assemblies with one rigid transform per assembly."""
+    """Keep eyelid XZ placement and curl; adjust whole-card depth from roots."""
     result=delta.copy();report=dict(lash_rigid_units=0,lash_rigid_before=0.,lash_rigid_after=0.)
     protected=rig.brows|rig.creases|{i for i,m in enumerate(rig.members) if 0 in m}
+    protected|=getattr(rig,'upper_followers',set())
     for side_text in recipe.get('eyes',{}):
         side=int(side_text)
         if side not in rig.rings:continue
@@ -61,71 +62,52 @@ def fit_rigid_contact(rig,delta,recipe):
         posed=rig.points+result;obstacle=surface(posed,skin)
         for unit in units:
             ids=np.asarray(unit['ids'],dtype=np.int32)
-            # Do not cut a connected card to free individual vertices.
             if unit['locked'] or protected.intersection(ids):continue
-            roots=[k for k,i in enumerate(ids) if i not in rig.strands
-                   and unit['gaps'][i] is not None and abs(unit['gaps'][i])<=width*.015]
-            if len(roots)<3:continue
-            cloud=posed[ids].copy();centre=cloud.mean(0)
+            cloud=posed[ids].copy()
             original=np.array([unit['gaps'][i] if unit['gaps'][i] is not None else np.nan for i in ids])
-            def gaps(points):
-                return np.array([v if (v:=clearance(obstacle,p)) is not None else np.nan for p in points])
-            before=gaps(cloud);valid=np.isfinite(before)&np.isfinite(original)
-            roots=np.array([k for k in roots if valid[k]],dtype=np.int32)
-            if len(roots)<3:continue
-            floor=np.minimum(np.minimum(original,before),0.)
-            residual=before[roots]-original[roots]
-            score=float(np.mean(residual**2));worst=float(np.max(abs(residual)))
-            best=cloud;best_score=score
-            # Rigid rotations preserve every edge length and the authored
-            # continuous outline. No independent root snapping or scaling.
-            angles=np.deg2rad([-8.,-4.,-2.,-.5,0.,.5,2.,4.,8.])
-            upper=sum(is_upper(rig,side,int(i)) for i in ids)>len(ids)/2
-            pitch_angles=np.deg2rad([-60.,-45.,-30.,-20.,-12.,-8.,-4.,0.,4.,8.,12.,20.,30.,45.,60.]) if upper else angles
-            from itertools import product
-            offsets=np.array([-.10,-.06,-.03,0.,.03,.06,.10])*width if upper else np.array([-.02,0.,.02])*width
-            yaw_angles=np.deg2rad([-20.,-10.,0.,10.,20.]) if upper else [0.]
-            for ax,ay,az,z_offset in product(pitch_angles,yaw_angles,angles,offsets):
-                cx,sx=np.cos(ax),np.sin(ax);rx=np.array(((1,0,0),(0,cx,-sx),(0,sx,cx)))
-                cy,sy=np.cos(ay),np.sin(ay);ry=np.array(((cy,0,sy),(0,1,0),(-sy,0,cy)))
-                cz,sz=np.cos(az),np.sin(az);rz=np.array(((cz,-sz,0),(sz,cz,0),(0,0,1)))
-                candidate=(cloud-centre)@(rz@ry@rx).T+centre
-                candidate[:,2]+=z_offset;gap=gaps(candidate)
-                if not np.all(np.isfinite(gap[roots])):continue
-                if not upper and not np.all(np.isfinite(gap[valid])):continue
-                covered=valid&np.isfinite(gap)
-                shift=min(float(np.mean(gap[roots]-original[roots])),float(np.min((gap-floor)[covered])))
-                if shift < -width*.15:continue
-                shift=min(shift,width*.15);candidate[:,1]+=shift
-                error=gap[roots]-shift-original[roots];value=float(np.mean(error**2))
-                if value>=best_score or np.max(abs(error))>worst+width*1e-6:continue
-                if not upper and np.count_nonzero(abs(error)>width*.001)>np.count_nonzero(abs(residual)>width*.001):continue
-                # Test triangle interiors too. Reject candidates that add
-                # penetration instead of pushing individual vertices out.
-                trial=posed.copy();trial[ids]=candidate
-                parents=unit['parents'];weights=unit['weights']
-                faces=np.arange(len(parents)*3).reshape((-1,3));free=np.ones(len(parents)*3)
-                if len(parents) and skin:
-                    a=np.einsum('kij,kja->kia',weights,posed[parents]).reshape((-1,3))
-                    b=np.einsum('kij,kja->kia',weights,trial[parents]).reshape((-1,3))
-                    eyes=[list(t) for t,f in rig.mesh_triangles if rig.info['labels'][f] in (3,5,7)
-                          and (1 if rig.original_points[list(t),0].mean()>=rig.info['plane'] else -1)==side]
-                    obstacles=[posed[np.asarray(skin)]]
-                    if eyes:
-                        eye_points=rig.original_points+getattr(rig,'eye_stack_shape',np.zeros_like(delta))
-                        obstacles.append(eye_points[np.asarray(eyes)])
-                    safe=True
-                    for obstacle_points in obstacles:
-                        baseline=S.depth_bounds(a,faces,obstacle_points,free,coherent=True)[0]
-                        contact=S.depth_bounds(b,faces,obstacle_points,free,coherent=True)[0]
-                        if np.min(contact)<np.min(baseline)-width*1e-5:safe=False;break
-                    if not safe:continue
-                best=candidate;best_score=value
+            gaps=np.array([v if (v:=clearance(obstacle,p)) is not None else np.nan for p in cloud])
+            valid=np.isfinite(original)&np.isfinite(gaps)
+            # Only originally buried/near-surface roots anchor the assembly.
+            # Lifted tips are clearance constraints, never attachment targets.
+            roots=valid&(abs(original)<=width*.005)&np.array([i not in rig.strands for i in ids])
+            if np.count_nonzero(roots)<3:continue
+            lifted=valid&((original>width*.015)|np.array([i in rig.strands for i in ids]))
+            error=gaps-original;score=float(np.mean(error[roots]**2))
+            low=-width*.10;high=width*.10
+            # Preserve each raised section's authored gap wherever it can be
+            # measured. A correction cannot worsen its existing discrepancy.
+            if np.any(lifted):
+                tolerance=np.maximum(abs(error[lifted]),width*.002)
+                low=max(low,float(np.max(error[lifted]-tolerance)))
+                high=min(high,float(np.min(error[lifted]+tolerance)))
+            floor=np.minimum(np.minimum(original,gaps),0.)
+            high=min(high,float(np.min((gaps-floor)[valid])))
+            shift=float(np.clip(np.mean(error[roots]),low,high)) if low<=high else 0.
+            # X and Z remain the eyelid solver's positions. A single Y shift
+            # retains the full curve, edge lengths, and root-tip separation.
+            parents=unit['parents'];weights=unit['weights']
+            obstacles=[posed[np.asarray(skin)]] if skin else []
+            eyes=[list(t) for t,f in rig.mesh_triangles if rig.info['labels'][f] in (3,5,7)
+                  and (1 if rig.original_points[list(t),0].mean()>=rig.info['plane'] else -1)==side]
+            if eyes:
+                eye_points=rig.original_points+getattr(rig,'eye_stack_shape',np.zeros_like(delta))
+                obstacles.append(eye_points[np.asarray(eyes)])
+            if len(parents) and abs(shift)>width*1e-8:
+                a=np.einsum('kij,kja->kia',weights,posed[parents]).reshape((-1,3))
+                faces=np.arange(len(a)).reshape((-1,3));free=np.ones(len(a))
+                limits=[np.min(S.depth_bounds(a,faces,o,free,coherent=True)[0]) for o in obstacles]
+                for _ in range(12):
+                    b=a.copy();b[:,1]+=shift
+                    if all(np.min(S.depth_bounds(b,faces,o,free,coherent=True)[0])>=limit-width*1e-5
+                           for o,limit in zip(obstacles,limits)):break
+                    shift*=.5
+                else:shift=0.
+            after=float(np.mean((error[roots]-shift)**2))
+            if after<score-width**2*1e-10:
+                result[ids,1]+=shift;posed[ids,1]+=shift;report['lash_rigid_units']+=1
+            else:after=score
             report['lash_rigid_before']=max(report['lash_rigid_before'],float(np.sqrt(score)))
-            report['lash_rigid_after']=max(report['lash_rigid_after'],float(np.sqrt(best_score)))
-            if best_score<score-width**2*1e-10:
-                result[ids]=best-rig.points[ids];posed[ids]=best
-                report['lash_rigid_units']+=1
+            report['lash_rigid_after']=max(report['lash_rigid_after'],float(np.sqrt(after)))
     return result,report
 
 
