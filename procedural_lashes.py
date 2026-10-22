@@ -50,6 +50,78 @@ def clearance(obstacle,point):
     return None if hit is None else float(hit.y-point[1])
 
 
+def fit_rigid_contact(rig,delta,recipe):
+    """Fit finished lash assemblies with one rigid transform per assembly."""
+    result=delta.copy();report=dict(lash_rigid_units=0,lash_rigid_before=0.,lash_rigid_after=0.)
+    protected=rig.brows|rig.creases|{i for i,m in enumerate(rig.members) if 0 in m}
+    for side_text in recipe.get('eyes',{}):
+        side=int(side_text)
+        if side not in rig.rings:continue
+        width=rig.widths['EYE',side];units,skin=contact_units(rig,side)
+        posed=rig.points+result;obstacle=surface(posed,skin)
+        for unit in units:
+            ids=np.asarray(unit['ids'],dtype=np.int32)
+            # Do not cut a connected card to free individual vertices.
+            if unit['locked'] or protected.intersection(ids):continue
+            roots=[k for k,i in enumerate(ids) if i not in rig.strands
+                   and unit['gaps'][i] is not None and abs(unit['gaps'][i])<=width*.015]
+            if len(roots)<3:continue
+            cloud=posed[ids].copy();centre=cloud.mean(0)
+            original=np.array([unit['gaps'][i] if unit['gaps'][i] is not None else np.nan for i in ids])
+            def gaps(points):
+                return np.array([v if (v:=clearance(obstacle,p)) is not None else np.nan for p in points])
+            before=gaps(cloud);valid=np.isfinite(before)&np.isfinite(original)
+            roots=np.array([k for k in roots if valid[k]],dtype=np.int32)
+            if len(roots)<3:continue
+            floor=np.minimum(np.minimum(original,before),0.)
+            residual=before[roots]-original[roots]
+            score=float(np.mean(residual**2));worst=float(np.max(abs(residual)))
+            best=cloud;best_score=score
+            # Small rigid rotations preserve every edge length and the authored
+            # continuous outline. No independent root snapping or scaling.
+            angles=np.deg2rad([-8.,-4.,-2.,-.5,0.,.5,2.,4.,8.])
+            from itertools import product
+            for ax,az,z_offset in product(angles,angles,(-.02*width,0.,.02*width)):
+                cx,sx=np.cos(ax),np.sin(ax);rx=np.array(((1,0,0),(0,cx,-sx),(0,sx,cx)))
+                cz,sz=np.cos(az),np.sin(az);rz=np.array(((cz,-sz,0),(sz,cz,0),(0,0,1)))
+                candidate=(cloud-centre)@(rz@rx).T+centre
+                candidate[:,2]+=z_offset;gap=gaps(candidate)
+                if not np.all(np.isfinite(gap[valid])):continue
+                shift=min(float(np.mean(gap[roots]-original[roots])),float(np.min((gap-floor)[valid])))
+                if shift < -width*.15:continue
+                shift=min(shift,width*.15);candidate[:,1]+=shift
+                error=gap[roots]-shift-original[roots];value=float(np.mean(error**2))
+                if value>=best_score or np.max(abs(error))>worst+width*1e-6:continue
+                if np.count_nonzero(abs(error)>width*.001)>np.count_nonzero(abs(residual)>width*.001):continue
+                # Test triangle interiors too. Reject candidates that add
+                # penetration instead of pushing individual vertices out.
+                trial=posed.copy();trial[ids]=candidate
+                parents=unit['parents'];weights=unit['weights']
+                faces=np.arange(len(parents)*3).reshape((-1,3));free=np.ones(len(parents)*3)
+                if len(parents) and skin:
+                    a=np.einsum('kij,kja->kia',weights,posed[parents]).reshape((-1,3))
+                    b=np.einsum('kij,kja->kia',weights,trial[parents]).reshape((-1,3))
+                    eyes=[list(t) for t,f in rig.mesh_triangles if rig.info['labels'][f] in (3,5,7)
+                          and (1 if rig.original_points[list(t),0].mean()>=rig.info['plane'] else -1)==side]
+                    obstacles=[posed[np.asarray(skin)]]
+                    if eyes:
+                        eye_points=rig.original_points+getattr(rig,'eye_stack_shape',np.zeros_like(delta))
+                        obstacles.append(eye_points[np.asarray(eyes)])
+                    safe=True
+                    for obstacle_points in obstacles:
+                        baseline=S.depth_bounds(a,faces,obstacle_points,free,coherent=True)[0]
+                        contact=S.depth_bounds(b,faces,obstacle_points,free,coherent=True)[0]
+                        if np.min(contact)<np.min(baseline)-width*1e-5:safe=False;break
+                    if not safe:continue
+                best=candidate;best_score=value
+            report['lash_rigid_before']=max(report['lash_rigid_before'],float(np.sqrt(score)))
+            report['lash_rigid_after']=max(report['lash_rigid_after'],float(np.sqrt(best_score)))
+            if best_score<score-width**2*1e-10:
+                result[ids]=best-rig.points[ids];posed[ids]=best
+                report['lash_rigid_units']+=1
+    return result,report
+
+
 def is_upper(rig,side,i):
     # dict.get evaluates its default even for an existing key. Most vertices
     # already have a known side, so avoid repeating nearest-curve searches.
