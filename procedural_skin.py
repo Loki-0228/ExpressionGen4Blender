@@ -91,6 +91,39 @@ class FaceFollowers:
         return result
 
 
+class EyeShadowFollowers:
+    """Bind shadow vertices to the same-side facial skin, preserving offsets."""
+    def __init__(self,points,triangles,members,plane):
+        from mathutils import Vector
+        from mathutils.bvhtree import BVHTree
+        self.vertices=[];self.triangles=[];self.weights=[]
+        points=np.asarray(points,dtype=float)
+        for side in (-1,1):
+            source=[tuple(t) for t in triangles
+                    if all((points[i,0]-plane)*side>=-1e-9 for i in t)
+                    and np.linalg.norm(np.cross(points[t[1]]-points[t[0]],points[t[2]]-points[t[0]]))>1e-15]
+            if not source:continue
+            tree=BVHTree.FromPolygons([Vector(p) for p in points],source,all_triangles=True)
+            for i,labels in enumerate(members):
+                if 13 not in labels or 0 in labels or (1 if points[i,0]>=plane else -1)!=side:continue
+                hit,normal,index,distance=tree.find_nearest(Vector(points[i]))
+                if index is None:continue
+                tri=source[index];a,b,c=points[list(tri)]
+                uv=np.column_stack((b-a,c-a))
+                s,t=np.linalg.lstsq(uv,np.asarray(hit)-a,rcond=None)[0]
+                weights=np.clip([1-s-t,s,t],0,1);weights/=weights.sum()
+                self.vertices.append(i);self.triangles.append(tri);self.weights.append(weights)
+        self.vertices=np.asarray(self.vertices,dtype=np.int32)
+        self.triangles=np.asarray(self.triangles,dtype=np.int32).reshape((-1,3))
+        self.weights=np.asarray(self.weights,dtype=float).reshape((-1,3))
+
+    def apply(self,delta):
+        result=delta.copy()
+        if len(self.vertices):
+            result[self.vertices]=np.einsum('ij,ijk->ik',self.weights,delta[self.triangles])
+        return result
+
+
 class EyelidSkin:
     def __init__(self,rig):
         self.rig=rig;self.regions={};self.fields={};self.falloff={};self.controls={};self.collars={};self.collar_fields={}

@@ -224,6 +224,8 @@ def merge(recipes,weights):
         for spec in recipe.get('custom_rules',[]):
             spec=copy.deepcopy(spec);spec['weight']=spec.get('weight',1)*weight
             result.setdefault('custom_rules',[]).append(spec)
+        if recipe.get('socket_hide') or recipe.get('socket_hide_weight'):
+            result['socket_hide_weight']=result.get('socket_hide_weight',0.)+float(recipe.get('socket_hide_weight',recipe.get('socket_hide',0.)))*weight
         for key in ('mouth','brows'):
             if key=='mouth' and recipe.get('mouth_reference'):
                 result['mouth_targets'].append(dict(reference=recipe['mouth_reference'],weight=weight))
@@ -335,7 +337,7 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
         directional=closure>1e-6 and not recipe.get('guide_preview')
         if directional:corner_moves[:,2]=0.
         if directional and globe:corner_moves[:]=0.
-        
+
         corners=np.array([(rig.curve('EYE',side,True,end)+rig.curve('EYE',side,False,end))*.5 for end in (0,1)])
         inner_end=int(np.argmin(abs(corners[:,0]-rig.info['plane'])))
         low=clouds[0];left,right=low[0,0],low[-1,0]
@@ -622,7 +624,7 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     quality.update(sweep_quality)
     delta,wing_quality=Lashes.lower_owned_upper_sections(rig,delta,lash_recipe)
     quality.update(wing_quality)
-    
+
     delta,order_quality=Lashes.cover_lower_band(rig,delta,lash_recipe)
     quality.update(order_quality)
     notify(rig,'单根睫毛随睫毛带运动')
@@ -692,6 +694,16 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
     quality.update(section_quality)
     delta,crease_quality=Lashes.follow_creases(rig,delta,lash_recipe,active)
     quality.update(crease_quality)
+    if recipe.get('occlude_accessories'):
+        # Closed socket: brows, lash bands and crease strips retreat behind the
+        # face shell. The mesh is untouched topologically, so UVs, materials
+        # and the writer's vertex-for-vertex keys all stay valid.
+        from . import procedural_texture as Cards
+        hidden={i for i,labels in enumerate(rig.members) if 2 in labels and 0 not in labels}
+        face={i for i,labels in enumerate(rig.members) if 0 in labels}
+        rise=Cards.hide_behind_face(points+delta,face,hidden)
+        delta+=rise
+        quality['accessory_occluded_vertices']=int(np.count_nonzero(np.any(rise!=0.,axis=1)))
     rig.last_oral_deformation=Cavity.reattach(rig,delta,rig.last_oral_deformation)
     # The crease-follow pass can move Face-labelled strips after the earlier
     # skin repair. Report the finished mesh too, not only that earlier stage.

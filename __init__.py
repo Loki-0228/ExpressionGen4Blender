@@ -3,7 +3,7 @@
 bl_info = {
     "name": "ExpressionGen",
     "author": "ExpressionGen",
-    "version": (2, 0, 0),
+    "version": (2, 1, 5),
     # Current node interfaces, GPU shader names and UILayout.progress use
     # Blender 4.0 APIs; expression generation does not require Blender 4.5.
     "blender": (4, 0, 0),
@@ -28,7 +28,7 @@ if 'bpy' in locals():
     for _name in ('procedural_gpu','procedural_projection','generation_progress','generation_job','core','matcher','landmarks','generate','operators','ui',
                   'region_core','region_preset','region_blender','region_contours','region_detection','region_accessories','region_lashes','region_curve_fit','region_guides',
                   'region_deformation','region_eye_motion','region_rigid_parts','region_transfer','procedural_neutral','region_session','region_commit','region_ui',
-                  'procedural_anatomy','procedural_surfaces','procedural_binding','procedural_tongue','procedural_lips','procedural_constraints','procedural_commit','procedural_oral','procedural_skin','procedural_rig','procedural_cavity','procedural_contacts','procedural_lashes','expression_rules','expression_runtime','procedural_atoms','procedural_generate','procedural_ui','expression_authoring','procedural_symmetry','expression_relations','curve_sculpt','expression_ui','guide_overlay','lifecycle'):
+                  'procedural_anatomy','procedural_surfaces','procedural_binding','procedural_tongue','procedural_lips','procedural_constraints','procedural_commit','procedural_oral','procedural_skin','procedural_rig','procedural_cavity','procedural_contacts','procedural_lashes','expression_rules','expression_runtime','procedural_atoms','procedural_generate','procedural_ui','expression_authoring','procedural_symmetry','expression_relations','curve_sculpt','expression_ui','guide_overlay','procedural_texture','procedural_card_depth','material_expressions','lifecycle'):
         _module=sys.modules.get(__name__+'.'+_name)
         if _module is not None:importlib.reload(_module)
 
@@ -39,6 +39,7 @@ try:
     from . import region_core, region_blender, region_contours, region_detection, region_accessories, region_lashes, region_curve_fit, region_guides, region_deformation, region_eye_motion, region_rigid_parts, region_transfer, procedural_neutral, region_session, region_commit, region_ui
     from . import procedural_anatomy,procedural_surfaces,procedural_binding,procedural_tongue,procedural_lips,procedural_constraints,procedural_oral,procedural_skin,procedural_rig,procedural_cavity,procedural_lashes,procedural_atoms,procedural_generate,procedural_ui,guide_overlay
     from . import expression_rules,expression_runtime,expression_authoring,procedural_contacts,procedural_symmetry,expression_relations,curve_sculpt,expression_ui
+    from . import procedural_texture,procedural_card_depth,material_expressions,procedural_socket
     from . import lifecycle
 except ImportError as exc:                # pragma: no cover
     raise ImportError(
@@ -50,7 +51,7 @@ _MODULES = (region_ui,procedural_ui,expression_ui)
 #: order matters - operators first, then the panel that references them
 _RELOAD = (core, matcher, landmarks, generate, operators, ui,
            region_core, region_blender, region_contours, region_detection, region_accessories, region_lashes, region_curve_fit, region_guides, region_deformation, region_eye_motion, region_rigid_parts, region_transfer, procedural_neutral, region_session, region_commit, region_ui,
-           procedural_anatomy,procedural_surfaces,procedural_binding,procedural_lips,procedural_constraints,procedural_oral,procedural_skin,procedural_rig,procedural_cavity,procedural_lashes,expression_rules,expression_runtime,procedural_atoms,procedural_generate,procedural_ui,expression_authoring,procedural_contacts,procedural_symmetry,expression_relations,curve_sculpt,expression_ui,guide_overlay,lifecycle)
+           procedural_anatomy,procedural_surfaces,procedural_binding,procedural_lips,procedural_constraints,procedural_oral,procedural_skin,procedural_rig,procedural_cavity,procedural_lashes,expression_rules,expression_runtime,procedural_atoms,procedural_generate,procedural_ui,expression_authoring,procedural_contacts,procedural_symmetry,expression_relations,curve_sculpt,expression_ui,procedural_texture,procedural_card_depth,material_expressions,guide_overlay,lifecycle)
 
 
 def register():

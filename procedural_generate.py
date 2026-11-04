@@ -67,7 +67,9 @@ def prepare(target,partition=None,allow_unmarked=False,partition_method='GEOMETR
         coordinates=[p.co.copy() for p in ob.data.shape_keys.reference_key.data];ob.shape_key_clear()
         for p,co in zip(ob.data.vertices,coordinates):p.co=co
     ob.modifiers.clear();ob.data.materials.clear()
-    slots={label:i for i,label in enumerate(sorted(set(labels)|{-1}))}
+    # 目影 (13) is never inferred from geometry, but its marker material must exist
+    # so the user can paint it without first creating a slot.
+    slots={label:i for i,label in enumerate(sorted(set(labels)|{-1,13}))}
     for label in slots:ob.data.materials.append(A.marker_material(A.marker_name(label),A.region_color(label)))
     for poly,label in zip(ob.data.polygons,labels):poly.material_index=slots[label]
     ob['ek_standard_slot_labels']=json.dumps({str(slot):label for label,slot in slots.items()})
@@ -199,6 +201,8 @@ def generate(target,partition,collection,families=None,strength=1.,lower_lid_sca
     output['ek_effective_recipes']=json.dumps(effective_recipes,ensure_ascii=False)
     output['ek_expression_rule_specs']=json.dumps({r['name']:plain(r) for r in recipes},ensure_ascii=False)
     output.display_type='TEXTURED';output.show_wire=False
+    # Every generated key starts at zero; only the user's slider moves it.
+    for block in output.data.shape_keys.key_blocks:block.value=0
     output.active_shape_key_index=0;output.show_only_shape_key=False
     report=dict(keys=len(accepted),skipped=skipped,warnings=rig.warnings,quality=records,
         unresolved=[row['name'] for row in records if row['unresolved']],source_required=False,

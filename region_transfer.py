@@ -685,6 +685,7 @@ def fit_source(source, partitioned_target, alignment=None,
     copied = {}
     for key in keys.key_blocks:
         new = fitted.shape_key_add(name=key.name, from_mix=False)
+        new.value = 0.0
         for i, (label, index) in enumerate(pairs):
             base=source_points[index] if label in O.ORAL_REGIONS else placed(source_points[index])
             raw=linear @ (key.data[index].co - keys.reference_key.data[index].co)
@@ -1152,6 +1153,7 @@ def transfer_to_copy(fitted, partitioned_target, **options):
             skipped.append(key.name)
             continue
         new = output.shape_key_add(name=key.name, from_mix=False)
+        new.value = 0.0
         source_deltas=[p.co-base for p,base in zip(key.data,source_basis)]
         for i in range(len(basis.data)):
             new.data[i].co = basis.data[i].co

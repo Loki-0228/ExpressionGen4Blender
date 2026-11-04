@@ -183,9 +183,10 @@ class Rig:
         from .procedural_neutral import closed_neutral
         self.original_points=self.points.copy()
         self.points,self.neutral_report=closed_neutral(self.info,snapshot) if close_mouth else (self.points,{'changed':False,'reason':'disabled'})
-        from .procedural_skin import FaceFollowers
+        from .procedural_skin import FaceFollowers,EyeShadowFollowers
         ob.data.calc_loop_triangles()
         face_triangles=[tuple(t.vertices) for t in ob.data.loop_triangles if self.info['labels'][t.polygon_index]==0]
+        self.shadow_followers=EyeShadowFollowers(self.original_points,face_triangles,self.info['members'],self.info['plane'])
         self.face_followers=FaceFollowers(self.original_points,face_triangles,
             {i for rows in self.info['rows'].values() for i,u,upper in rows})
         lip_controls={i for i,u,upper in self.info['rows'].get(('LIP',0),[])}

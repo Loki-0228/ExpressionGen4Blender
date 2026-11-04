@@ -62,7 +62,7 @@ def focus(context, primary, references=()):
                 if area.type=='VIEW_3D':area.spaces.active.shading.color_type='MATERIAL'
     keep={ob for ob in (primary,*references) if ob is not None}
     for ob in tuple(keep):
-        keep.update(child for child in ob.children if child.get('ek_rigid_owner')==ob.name)
+        keep.update(child for child in ob.children if child.get('ek_rigid_owner')==ob.name or child.get('ek_material_expression'))
     from . import region_guides as G
     G.focus_collections(context,keep)
     layer=context.view_layer

@@ -17,7 +17,7 @@ class EKRULE_Node(bpy.types.PropertyGroup):
     mode:bpy.props.EnumProperty(name='识别方式',items=[('GUIDE','已有校正曲线',''),('BOUNDARY','分区边界',''),('SECTION','分区截面',''),('DERIVED','引用另一曲线','')])
     kind:bpy.props.EnumProperty(name='控制部位',items=KINDS)
     region:bpy.props.IntProperty(name='所属分区',default=0,options={'HIDDEN'})
-    region_number:bpy.props.IntProperty(name='所属分区',default=0,min=-1,max=6,
+    region_number:bpy.props.IntProperty(name='所属分区',default=0,min=-1,max=7,
         **C.region_number_accessors('region'))
     side:bpy.props.EnumProperty(name='左右侧',items=[('0','中间',''),('1','X 正侧',''),('-1','X 负侧','')])
     index:bpy.props.IntProperty(name='同类候选序号',default=0,min=0)
@@ -57,7 +57,7 @@ class EKRULE_Influence(bpy.types.PropertyGroup):
     name:bpy.props.StringProperty(name='所属规则 ID')
     curve:bpy.props.StringProperty(name='影响曲线 ID（可选）')
     region:bpy.props.IntProperty(name='影响网格分区',default=0,options={'HIDDEN'})
-    region_number:bpy.props.IntProperty(name='影响网格分区',default=0,min=-1,max=6,
+    region_number:bpy.props.IntProperty(name='影响网格分区',default=0,min=-1,max=7,
         **C.region_number_accessors('region'))
     metric:bpy.props.EnumProperty(name='影响特点',items=METRICS)
     input_min:bpy.props.FloatProperty(name='输入下限',default=0.)
@@ -95,7 +95,7 @@ class EKRULE_Value(bpy.types.PropertyGroup):
 class EKRULE_Mask(bpy.types.PropertyGroup):
     name:bpy.props.StringProperty(name='条件名称')
     region:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2,options={'HIDDEN'})
-    region_number:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2,min=-2,max=6,
+    region_number:bpy.props.IntProperty(name='分区编号（-2 为全部）',default=-2,min=-2,max=7,
         **C.region_number_accessors('region'))
     axis:bpy.props.EnumProperty(name='位置轴',items=[('0','X',''),('1','Y',''),('2','Z','')])
     minimum:bpy.props.FloatProperty(name='位置比例下限',default=0.,min=0,max=1)

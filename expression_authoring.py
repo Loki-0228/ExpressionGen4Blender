@@ -90,8 +90,21 @@ def spec_from_copies(context,group):
     return spec,s,output,snapshot
 
 
+_embedded_pending=[]
+
+
 def write_copies(context,group,progress=None):
+    """Strip embedded cards for the solve, then fold them back in."""
+    try:return _write_copies(context,group,progress)
+    finally:
+        from . import material_expressions as Cards
+        while _embedded_pending:Cards.embed(_embedded_pending.pop())
+
+
+def _write_copies(context,group,progress=None):
     spec,s,output,snapshot=spec_from_copies(context,group)
+    from . import material_expressions as Cards
+    if Cards.unembed(output):_embedded_pending.append(output)
     if progress and hasattr(progress,'describe'):progress.describe('表情曲线写回',s.preview,snapshot,expression=spec['name'])
     settings=json.loads(output['ek_procedural_settings']);rig=R.Rig(s.preview,snapshot,settings.get('close_mouth',True));rig.progress=progress
     rig.style_options=settings.get('style_options',{})

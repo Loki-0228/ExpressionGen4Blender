@@ -11,7 +11,8 @@ import unicodedata
 
 # Stable semantic IDs, independent of editable Blender material-slot order.
 REGION_NAMES = {-1: '不参与', -2: '不确定', 0: 'Face', 2: 'Eyelashes/Brows',
-                3: 'Eyes', 7: 'Blank stare', 8: 'Mouth', 9: 'Teeth', 12: 'Tongue'}
+                3: 'Eyes', 7: 'Blank stare', 8: 'Mouth', 9: 'Teeth', 12: 'Tongue',
+                13: 'Eye shadow'}
 DEFAULT_TRANSFER_REGIONS = frozenset(label for label in REGION_NAMES if label >= 0)
 
 
@@ -20,7 +21,7 @@ def canonical_region(label):
     return 3 if label==5 else label
 
 
-REGION_UI_NUMBERS={label:number for number,label in enumerate((0,2,3,7,8,9,12))}
+REGION_UI_NUMBERS={label:number for number,label in enumerate((0,2,3,7,8,9,12,13))}
 REGION_UI_NUMBERS.update({-1:-1,-2:-2})
 REGION_FROM_UI_NUMBER={number:label for label,number in REGION_UI_NUMBERS.items()}
 
@@ -50,12 +51,15 @@ def exact_material_region(name):
     names['mouth/tongue'] = 8
     names['gaze'] = 3
     names.update({'面部':0,'眉睫':2,'眉毛':2,'睫毛':2,'眼睛':3,'左眼':3,'右眼':3,
-                  '高光':3,'瞳孔与高光':3,'呆滞眼':7,'口腔':8,'牙齿':9,'舌头':12})
+                  '高光':3,'瞳孔与高光':3,'呆滞眼':7,'口腔':8,'牙齿':9,'舌头':12,
+                  '目影':13,'眼影':13,'アイシャドウ':13,'アイシャドー':13})
     return names.get(name.casefold())
 
 
 _ENGLISH_REGION_PATTERNS={
-    0:r'face|facial|lips?',
+    # "head" alone names the face on LOD-style rigs (1_03_head_022__mat_03).
+    # Exclude hair and headgear so those stay out of the Face partition.
+    0:r'face|facial|lips?|head(?!\s*(?:hair|wear|band|phone|gear|set))',
     2:r'eye\s*lash(?:es)?|lash(?:es)?|eye\s*brows?|brows?|eye\s*liners?|eye\s*lines?|double\s*eyelid|eyelid\s*lines?',
     3:r'eyes?|eye\s*balls?|iris(?:es)?|pupils?',
     5:r'gaze|high\s*lights?|catch\s*lights?',
@@ -63,11 +67,12 @@ _ENGLISH_REGION_PATTERNS={
     8:r'mouth|oral',
     9:r'teeth|tooth|dental',
     12:r'tongue',
+    13:r'eye\s*shadows?|eyeshadow',
 }
 _ENGLISH_REGION_PATTERNS={label:re.compile(r'(?<![a-z])(?:'+pattern+r')(?![a-z])')
                           for label,pattern in _ENGLISH_REGION_PATTERNS.items()}
 _CJK_REGION_KEYWORDS={
-    0:('面部','脸部','臉部','脸皮','臉皮','顔肌','嘴唇','眼眶'),
+    0:('面部','脸部','臉部','脸皮','臉皮','顔肌','顔','颜','脸','臉','面','嘴唇','眼眶'),
     2:('眉睫','眉毛','睫毛','眼线','眼線','双眼皮','雙眼皮','まつげ','まつ毛','アイライン'),
     3:('眼睛','眼球','瞳孔','虹膜','目玉'),
     5:('眼高光','高光','ハイライト'),
@@ -75,6 +80,7 @@ _CJK_REGION_KEYWORDS={
     8:('口腔','口内','口內','嘴内','嘴內'),
     9:('牙齿','牙齒','牙龈','牙齦'),
     12:('舌头','舌頭','ベロ','べろ'),
+    13:('目影','眼影','アイシャドウ','アイシャドー'),
 }
 _SINGLE_CJK_REGIONS={'脸':0,'臉':0,'顔':0,'眉':2,'目':3,'眼':3,'口':8,'歯':9,'牙':9,'舌':12}
 
@@ -100,7 +106,7 @@ def _material_region(name):
                   if re.search(r'(?<![^\W_])'+token+r'(?![^\W_])',words))
     # Eye/face/mouth can qualify a more specific feature (Face_EyeLashes,
     # Eye_Highlight, Mouth_Teeth). Equally specific conflicting labels stay unknown.
-    specific=labels & {2,5,7,9,12}
+    specific=labels & {2,5,7,9,12,13}
     if specific=={9,12} and 8 in labels:return 8
     if len(specific)>1:return None
     if specific:

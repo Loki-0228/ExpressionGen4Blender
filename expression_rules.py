@@ -9,7 +9,7 @@ LEGACY_FORMAT='ExpressionKit.expression_rules'
 SCHEMA_VERSION=1
 FAMILIES=('eye','brow','mouth','tongue','jaw','custom')
 KINDS=('EYE_UPPER','EYE_LOWER','LIP_UPPER','LIP_LOWER','BROW','CREASE','LASH_LINE','LASH','TONGUE','CUSTOM')
-REGIONS=(-1,0,2,3,5,7,8,9,12)
+REGIONS=(-1,0,2,3,5,7,8,9,12,13)
 METRICS=('center_x','center_y','center_z','span_x','span_y','span_z','length','aspect','boundary_loops','components','closed','vertices')
 CONSTRAINTS=('face_fold','eye_depth','eyelid_direction','lash_attachment','closed_seam','lip_order','cavity_attachment','teeth_follow','tongue_exit')
 
@@ -46,11 +46,22 @@ def smirk_outline(reference,neutral,closed=False):
 @lru_cache(maxsize=1)
 def _builtin_profile():
     data=json.loads((Path(__file__).parent/'data/procedural_vody.json').read_text(encoding='utf8'))
+    # Expressions fitted from the reference model (eye lid and lip motion
+    # sampled along the horizontal extent of each region). They extend the
+    # Vodyanitsa preset without touching its audited samples.
+    reference=Path(__file__).parent/'data/reference_recipes.json'
+    if reference.exists():
+        for recipe in json.loads(reference.read_text(encoding='utf8'))['recipes']:
+            if any(row['name']==recipe['name'] for row in data['recipes']):continue
+            data['recipes'].append(recipe)
     dental=json.loads((Path(__file__).parent/'data/dental_vody.json').read_text(encoding='utf8'))
     # Tooth islands can straddle the lip height. Their coherent Original
     # opening action identifies the row; centroid height alone mixed rows.
     for recipe in data['recipes']:
         if recipe['family'] not in ('mouth','tongue'):continue
+        # Fitted reference recipes have no dental samples; only the audited
+        # preset names carry a tooth reference.
+        if recipe['name'] not in dental['recipes']:continue
         oral=recipe.setdefault('oral',{})
         for kind in ('teeth_upper','teeth_lower'):oral.pop(kind,None)
         oral.update(copy.deepcopy(dental['recipes'][recipe['name']]))
@@ -138,6 +149,34 @@ def _builtin_profile():
                 u,_,vh=np.linalg.svd(np.eye(3)+gain*(np.asarray(pose['rotation'])-np.eye(3)))
                 pose['rotation']=(u@vh).tolist()
     data['feedback_revision']=45
+    # A card-ready face contracts the aperture in both axes. It is independent
+    # of blink style; the final socket pass also hides the whole eye stack.
+    closed=copy.deepcopy(next(r for r in data['recipes'] if r['name']=='まばたき'))
+    closed.update(name='目消し',socket_hide=1.,special=True,can_symmetrize=False)
+    for eye in closed['eyes'].values():
+        eye['upper']=np.zeros((17,3)).tolist();eye['lower']=np.zeros((17,3)).tolist()
+        eye['closure']=0.;eye['blink']=0.;eye['smile']=0.;eye['flat']=0.
+        eye['lash_shape_preserve']=0.
+    closed['brows']={}
+    # These reference morphs replace the eye with a biaoq card. Their sampled
+    # lid offsets describe disappearance, not an ordinary eyelid expression.
+    for replacement in data['recipes']:
+        if replacement['name'] in ('はぅ','はちゅ目'):
+            replacement['eyes']=copy.deepcopy(closed['eyes'])
+            replacement.update(socket_hide=1.,special=True,can_symmetrize=False)
+    compatibility=copy.deepcopy(closed);compatibility['name']='眼孔闭合'
+    data['recipes']=data['recipes']+[closed,compatibility]
+    # Card expressions: the reference model drives these with mesh quads; the
+    # plugin generates the matching card instead, so each one only needs a key
+    # of its own name on the result. An empty recipe yields exactly that.
+    # 脸红 is the procedural blush shell; 照れ is the reference's material blush
+    # (same visible effect) and 目影濃 opens the eye-shadow card.
+    for name in ('はぁと','星目','涙','汗颜','111','1111','11+','怒','！','？','！！','汗',
+                 '脸红','照れ','目影濃'):
+        if any(r['name']==name for r in data['recipes']):continue
+        data['recipes'].append(dict(name=name,family='custom',eyes={},mouth={},
+                                    brows={},oral={},card_expression=True,
+                                    can_symmetrize=False,special=True))
     return data
 
 

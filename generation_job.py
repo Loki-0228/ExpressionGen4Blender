@@ -123,6 +123,9 @@ class Job:
             loaded.objects=[result['output']]
             loaded.collections=[result['guides']]
         output=loaded.objects[0];new_guides=loaded.collections[0]
+        # Blender 5.x creates shape keys at 1.0; imported results must start neutral.
+        if output.data.shape_keys:
+            for block in output.data.shape_keys.key_blocks:block.value=0
         try:
             owners={ob.name:ob for ob in [output,*output.children_recursive,*new_guides.all_objects]}
             # Library append may suffix names; map original names using the
@@ -179,6 +182,24 @@ class Job:
         if report['unresolved']:message+='；需检查局部变形或遮挡：'+'、'.join(report['unresolved'])
         shared.message=message;settings.message=message
         self.close()
+        try:
+            from . import material_expressions as Cards
+            from .procedural_ui import generation_options
+            names=[name for name in generation_options(settings)['selection']
+                   if output.data.shape_keys and name in output.data.shape_keys.key_blocks]
+            built=Cards.build_for(output,settings,names,
+                                  output.users_collection[0] if output.users_collection else collection)
+            if built:
+                message+='；材质表情卡片 %d 张'%len(built)
+                # Fold the cards into the result so one set of key sliders drives them.
+                merged=Cards.embed(output)
+                if merged:message+='（已并入检查模型，共 %d 个顶点）'%merged
+            warnings=json.loads(output.get('ek_card_warnings','[]'))
+            if warnings:message+='；卡片未生成：'+'；'.join(warnings)
+            shared.message=message;settings.message=message
+        except Exception as exc:
+            message+='；材质表情卡片失败：'+str(exc)
+            shared.message=message;settings.message=message
         if result.get('timing'):
             from .generation_progress import REPORT_KEY
             payload=json.dumps(result['timing'],ensure_ascii=False)

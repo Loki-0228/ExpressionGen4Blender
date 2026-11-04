@@ -17,6 +17,39 @@ class EKPROC_Expression(bpy.types.PropertyGroup):
     family:bpy.props.StringProperty()
 
 
+class EKPROC_Card(bpy.types.PropertyGroup):
+    """One texture card. REGION follows a partition, SHELL covers Face."""
+    name:bpy.props.StringProperty(name='卡片名称',default='目影')
+    kind:bpy.props.EnumProperty(name='类型',items=[
+        ('REGION','贴合分区','贴合一个分区表面的透明平面，关闭时缩进脸壳正面投影内'),
+        ('SHELL','整体曲面罩','罩住整个 Face 分区的透明薄壳，主要用于腮红'),
+        ('ANCHOR','定位平面','跟随 EK_J_ 空物体的平面，关闭时沿法线缩入头壳')],default='REGION')
+    region:bpy.props.IntProperty(name='贴合分区编号',default=7,min=-1,max=7,
+        description='REGION 卡片贴合的分区；7 为眼白，目影即在此基础上向外扩展')
+    expand:bpy.props.FloatProperty(name='向外扩展',default=1.,min=1.,max=3.,precision=2,
+        description='以分区轮廓中心为基准放大；1 表示贴合原轮廓')
+    band:bpy.props.FloatProperty(name='覆盖比例',default=0.,min=0.,max=1.,precision=2,
+        description='只取分区上方的这一部分；目影用 0.33 覆盖眼白上 1/3，0 表示整个分区')
+    texture:bpy.props.StringProperty(name='透明贴图',subtype='FILE_PATH',
+        description='PNG/TGA；留空则使用纯色卡片，便于先确认位置')
+    anchor:bpy.props.StringProperty(name='定位空物体',default='EK_J_',
+        description='ANCHOR 卡片的位置与朝向；空物体本地 Z 轴为卡片正面')
+    columns:bpy.props.IntProperty(name='横向细分',default=10,min=3,max=64)
+    rows:bpy.props.IntProperty(name='纵向细分',default=8,min=3,max=64)
+    clearance:bpy.props.FloatProperty(name='贴图离面距离',default=.010,min=0.,max=.2,precision=4,
+        description='占分区宽度的比例；越大越不容易穿模，也越容易看到悬空')
+    margin:bpy.props.FloatProperty(name='缩入余量',default=.010,min=0.,max=.2,precision=4,
+        description='关闭状态相对脸壳正面的额外后退，占分区宽度比例')
+    offset:bpy.props.FloatProperty(name='曲面罩厚度',default=.004,min=0.,max=.1,precision=4)
+    scale:bpy.props.FloatProperty(name='曲面罩比例',default=1.,min=.1,max=3.)
+    width:bpy.props.FloatProperty(name='定位平面宽',default=.1,min=.001,max=2.)
+    height:bpy.props.FloatProperty(name='定位平面高',default=.1,min=.001,max=2.)
+    tint:bpy.props.FloatVectorProperty(name='颜色',subtype='COLOR',size=4,min=0.,max=1.,
+        default=(1.,1.,1.,1.))
+    expressions:bpy.props.StringProperty(name='出现的表情',default='',
+        description='逗号分隔；留空表示对每个生成的表情都显示')
+
+
 def sync_choices(settings):
     rows=recipe_catalog(settings.id_data);catalog=dict(rows)
     for i in reversed(range(len(settings.expressions))):
@@ -30,6 +63,16 @@ def sync_choices(settings):
 
 def options_opened(settings,context):
     if settings.show_options:sync_choices(settings)
+
+
+def default_cards(settings):
+    """Seed the two plan defaults once, without overwriting user cards."""
+    if settings.cards:return
+    from . import material_expressions as M
+    for spec in M.default_specs():
+        item=settings.cards.add()
+        for key,value in spec.items():
+            if hasattr(item,key):setattr(item,key,value)
 
 
 def generation_options(settings):
@@ -72,11 +115,18 @@ class EKPROC_Settings(bpy.types.PropertyGroup):
     process_lashes:bpy.props.BoolProperty(name='单独处理单根睫毛',default=True,
         description='生成曲线时识别单根睫毛；生成表情时只让当前有曲线标记的单根睫毛独立形变。没有标记或关闭时随整体眼睑移动')
     kind:bpy.props.EnumProperty(name='显示部位',items=[('ALL','全部','')]+[(k,v,'') for k,v in G.KINDS.items()])
-    label:bpy.props.EnumProperty(name='所选面分区',items=[('0','0 · 面部',''),('2','1 · 眉毛与睫毛',''),('3','2 · 瞳孔与高光',''),('7','3 · 眼白',''),('8','4 · 口腔（自动上下组）',''),('9','5 · 牙齿（自动上下组）',''),('12','6 · 舌头',''),('-1','-1 · 不参与表情',''),('81','4 · 上口腔',''),('82','4 · 下口腔',''),('91','5 · 上牙',''),('92','5 · 下牙','')])
+    label:bpy.props.EnumProperty(name='所选面分区',items=[('0','0 · 面部',''),('2','1 · 眉毛与睫毛',''),('3','2 · 瞳孔与高光',''),('7','3 · 眼白',''),('8','4 · 口腔（自动上下组）',''),('9','5 · 牙齿（自动上下组）',''),('12','6 · 舌头',''),('13','7 · 目影',''),('-1','-1 · 不参与表情',''),('81','4 · 上口腔',''),('82','4 · 下口腔',''),('91','5 · 上牙',''),('92','5 · 下牙','')])
     force_symmetry:bpy.props.BoolProperty(name='强制左右对称',default=False,
         description='将 X 正侧完成约束后的坐标镜像到负侧；可复用的眼眉仅计算正侧。子表情、组合及特殊表情保持定义；无法配对的活动顶点会阻止该表情输出')
     compute_backend:bpy.props.EnumProperty(name='计算设备',items=[('AUTO','自动 GPU','可用时用 NVIDIA CUDA 加速三角面接触；小任务或不可用时自动回退 CPU'),('CPU','CPU','仅使用 CPU 计算')],default='AUTO')
     expressions:bpy.props.CollectionProperty(type=EKPROC_Expression)
+    cards:bpy.props.CollectionProperty(type=EKPROC_Card)
+    card_index:bpy.props.IntProperty(default=0,min=0)
+    build_cards:bpy.props.BoolProperty(name='生成材质表情卡片',default=True,
+        description='按参考卡片与下方列表生成独立网格与形态键；关闭时不创建任何卡片')
+    card_texture:bpy.props.StringProperty(name='参考卡片贴图',subtype='FILE_PATH',
+        description='参考模型的表情贴图（bq.png）；留空时卡片为纯色，位置仍可检查')
+    show_cards:bpy.props.BoolProperty(name='材质表情',default=False)
     expression_index:bpy.props.IntProperty(default=0,min=0)
     selection_anchor:bpy.props.IntProperty(default=-1)
     expression_search:bpy.props.StringProperty(name='搜索表情',options={'TEXTEDIT_UPDATE'})
@@ -240,6 +290,9 @@ class EKPROC_OT_work(bpy.types.Operator):
                     value=int(s.label);label=value//10 if value>=80 else value
                     labels=R.mesh_regions(s.working);slot=next((p.material_index for p,l in zip(s.working.data.polygons,labels) if l==label),None)
                     if slot is None:
+                        known=json.loads(s.working.get('ek_standard_slot_labels','{}'))
+                        slot=next((int(k) for k,v in known.items() if v==label and int(k)<len(s.working.data.materials)),None)
+                    if slot is None:
                         slot=len(s.working.data.materials);s.working.data.materials.append(A.marker_material(A.marker_name(label),A.region_color(label)))
                     mapping=json.loads(s.working.get('ek_standard_slot_labels','{}'));mapping[str(slot)]=label
                     s.working['ek_standard_slot_labels']=json.dumps(mapping)
@@ -300,9 +353,14 @@ class EKPROC_OT_work(bpy.types.Operator):
                     s.target=shared.target;s.working=shared.preview;s.collection=shared.guide_collection;s.output=shared.transferred
                 flush(context)
                 from .generation_progress import Progress
-                with Progress(context) as progress:
-                    name,quality=P.combine(s.target,s.working,s.collection,s.output,s.combination,progress=progress,
-                        process_lashes=s.process_lashes)
+                from . import material_expressions as Cards
+                Cards.unembed(s.output)
+                try:
+                    with Progress(context) as progress:
+                        name,quality=P.combine(s.target,s.working,s.collection,s.output,s.combination,progress=progress,
+                            process_lashes=s.process_lashes)
+                finally:
+                    Cards.embed(s.output)
                 S.focus(context,s.output);s.message='已按当前权重重新求解「'+name+'」，原权重已归零';s.confirmed=None
                 if shared.transferred==s.output:shared.confirmed_result=None;shared.message=s.message
             elif self.action=='RESULT':S.focus(context,s.output)
@@ -319,7 +377,17 @@ class EKPROC_OT_work(bpy.types.Operator):
                 if s.output.get('ek_procedural_hash')!=snapshot['hash'] or s.output.get('ek_procedural_input')!=snapshot['input']:
                     raise ValueError('曲线或分区已修改，请重新生成后再确认')
                 if not options_match(s,s.output,True):raise ValueError('生成设置已改变，请重新生成后再确认')
-                count,backup,children=K.apply(s.target,s.output)
+                from . import material_expressions as Cards
+                # Write-back needs the result to match the target vertex for vertex.
+                Cards.unembed(s.output)
+                try:count,backup,children=K.apply(s.target,s.output)
+                except Exception:
+                    Cards.embed(s.output);raise
+                try:
+                    children=list(children)+Cards.commit(s.target,s.output)
+                except Exception as card_exc:
+                    s.message='卡片写回失败：'+str(card_exc)
+                Cards.embed(s.output)
                 final=s.output.get('ek_confirmed_target')
                 S.restore(context,final=final)
                 for child in children:
@@ -396,6 +464,67 @@ class EKPROC_OT_export_timing(bpy.types.Operator,ExportHelper):
         self.report({'INFO'},'已导出阶段、表情、界面刷新耗时和约束工作量');return {'FINISHED'}
 
 
+class EKPROC_UL_cards(bpy.types.UIList):
+    def draw_item(self,context,layout,data,item,icon,active_data,active_propname,index):
+        row=layout.row(align=True)
+        row.prop(item,'name',text='',emboss=False)
+        row.label(text={'REGION':'贴合分区','SHELL':'曲面罩','ANCHOR':'定位平面'}[item.kind])
+
+
+class EKPROC_OT_card(bpy.types.Operator):
+    bl_idname='exprkit_procedural.card';bl_label='材质表情卡片';bl_options={'REGISTER','UNDO'}
+    action:bpy.props.EnumProperty(items=[('ADD','添加',''),('REMOVE','删除',''),('DEFAULT','恢复默认','')])
+    def execute(self,context):
+        s=context.scene.exprkit_procedural
+        if self.action=='DEFAULT':
+            from . import material_expressions as M
+            s.cards.clear()
+            for spec in M.default_specs():
+                item=s.cards.add()
+                for key,value in spec.items():
+                    if hasattr(item,key):setattr(item,key,value)
+            s.card_index=0;return {'FINISHED'}
+        if self.action=='ADD':
+            item=s.cards.add();item.name='材质表情 %d'%(len(s.cards))
+            s.card_index=len(s.cards)-1;return {'FINISHED'}
+        if self.action=='REMOVE' and s.cards:
+            s.cards.remove(min(s.card_index,len(s.cards)-1))
+            s.card_index=max(0,min(s.card_index,len(s.cards)-1))
+        return {'FINISHED'}
+
+
+def card_options(layout,settings):
+    layout.prop(settings,'show_cards',text='材质表情',
+                icon='TRIA_DOWN' if settings.show_cards else 'TRIA_RIGHT',emboss=False)
+    if not settings.show_cards:return
+    default_cards(settings)
+    box=layout.box()
+    box.prop(settings,'build_cards')
+    row=box.row(align=True)
+    for action,label in (('ADD','添加'),('REMOVE','删除'),('DEFAULT','恢复默认')):
+        row.operator('exprkit_procedural.card',text=label).action=action
+    box.template_list('EKPROC_UL_cards','',settings,'cards',settings,'card_index',rows=4)
+    if not settings.cards:
+        box.label(text='默认生成「目影」与「腮红」两张卡片',icon='INFO');return
+    item=settings.cards[min(settings.card_index,len(settings.cards)-1)]
+    column=box.column(align=True)
+    column.prop(item,'name');column.prop(item,'kind')
+    if item.kind=='REGION':
+        column.prop(item,'region');column.prop(item,'expand',slider=True)
+        column.prop(item,'band',slider=True)
+        column.prop(item,'clearance',slider=True);column.prop(item,'margin',slider=True)
+        column.prop(item,'columns');column.prop(item,'rows')
+    elif item.kind=='SHELL':
+        column.prop(item,'offset',slider=True);column.prop(item,'scale',slider=True)
+    else:
+        column.prop(item,'anchor');column.prop(item,'width');column.prop(item,'height')
+    column.prop(item,'texture')
+    if not item.texture:column.label(text='留空为纯色卡片，先确认位置',icon='INFO')
+    column.prop(item,'tint',text='颜色 / 透明度')
+    column.prop(item,'expressions',text='出现的表情')
+    column.label(text='关闭时缩入脸壳投影，开启时贴合分区',icon='INFO')
+
+
 class EKPROC_PT_panel(bpy.types.Panel):
     bl_idname='EKPROC_PT_panel';bl_label='程序化表情';bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='ExpressionGen';bl_order=1
     def draw(self,context):
@@ -421,6 +550,7 @@ class EKPROC_PT_panel(bpy.types.Panel):
         l.prop(s,'force_symmetry')
         l.prop(s,'compute_backend')
         style_options(l,s)
+        card_options(l,s)
         row=self.layout.row()
         if not draw(row,context):
             row.enabled=bool(s.working)
@@ -440,7 +570,7 @@ class EKPROC_PT_panel(bpy.types.Panel):
         button(l,'RESTORE','暂时恢复原场景显示',context.scene.exprkit_regions.session_running)
 
 
-CLASSES=(EKPROC_Expression,EKPROC_Settings,EKPROC_OT_choose,EKPROC_UL_expressions,EKPROC_OT_work,EKPROC_OT_export_timing)
+CLASSES=(EKPROC_Expression,EKPROC_Card,EKPROC_UL_cards,EKPROC_OT_card,EKPROC_Settings,EKPROC_OT_choose,EKPROC_UL_expressions,EKPROC_OT_work,EKPROC_OT_export_timing)
 def register():
     for cls in CLASSES:bpy.utils.register_class(cls)
     bpy.types.Scene.exprkit_procedural=bpy.props.PointerProperty(type=EKPROC_Settings)

@@ -149,6 +149,31 @@ def rebuild_drivers(output):
                 if rows:drive_channel(ob,full,axis,rows,output.data.shape_keys)
 
 
+def retarget_drivers(owner,old_key,new_key):
+    """Follow a replaced Key without clearing drivers this apply does not own.
+
+    Only variables whose target id is the old Key are rewritten; unknown
+    drivers and unrelated targets stay untouched. Return the changed targets
+    so a failed apply can restore the old references.
+    """
+    if old_key is None or new_key is None:return []
+    animation=getattr(owner,'animation_data',None)
+    if animation is None:return []
+    changed=[]
+    for curve in animation.drivers:
+        for variable in curve.driver.variables:
+            for driver_target in variable.targets:
+                if driver_target.id==old_key:
+                    driver_target.id=new_key;changed.append(driver_target)
+    return changed
+
+
+def restore_driver_targets(targets,new_key,old_key):
+    """Point retargeted variables back before the staged Key is discarded."""
+    for driver_target in targets:
+        if driver_target.id==new_key:driver_target.id=old_key
+
+
 def apply(target,result):
     """Write the one-mesh result back, preserving old keys and original materials."""
     from . import procedural_generate as P,procedural_commit as Commit
@@ -162,7 +187,8 @@ def apply(target,result):
     if old.shape_keys and not old.shape_keys.use_relative:raise ValueError('不能覆盖绝对形态键')
     if old.shape_keys and old.shape_keys.reference_key.name in [k.name for k in result.data.shape_keys.key_blocks[1:]]:
         raise ValueError('表情名称与原始 Basis 重名，请先重命名')
-    staged=target.copy();staged.data=old.copy();arm=None;backup=None;new_groups=[];mod=None
+    staged=target.copy();staged.data=old.copy();arm=None;backup=None;backup_arm=None;new_groups=[];mod=None
+    new_key=None;rebound=[]
     previous_arm=target.get('ek_oral_armature');previous_poses=target.get('ek_oral_poses')
     try:
         # Transfer reviewed displacements around the untouched native Basis.
@@ -173,6 +199,7 @@ def apply(target,result):
         full_origins=np.asarray(full_origins,dtype=np.int32)
         basis=(staged.data.shape_keys.reference_key if staged.data.shape_keys
                else staged.shape_key_add(name='Basis',from_mix=False))
+        new_key=staged.data.shape_keys
         original_basis=Commit.coordinates(old_basis)[full_origins]
         committed_basis=original_basis.copy()
         committed_basis[result_indices]=incoming[0][1]
@@ -189,12 +216,7 @@ def apply(target,result):
             # Mesh.copy() retains Key settings, drivers, Action slots and NLA,
             # including structures the public API cannot reconstruct. Only
             # self-references must follow the private copy; no id_type writes.
-            animation=staged.data.shape_keys.animation_data
-            if animation:
-                for curve in animation.drivers:
-                    for variable in curve.driver.variables:
-                        for driver_target in variable.targets:
-                            if driver_target.id==old.shape_keys:driver_target.id=staged.data.shape_keys
+            retarget_drivers(staged.data.shape_keys,old.shape_keys,staged.data.shape_keys)
         for name,coords,minimum,maximum in incoming[1:]:
             key=staged.data.shape_keys.key_blocks.get(name) or staged.shape_key_add(name=name,from_mix=False)
             previous=old.shape_keys.key_blocks.get(name) if old.shape_keys else None
@@ -225,21 +247,49 @@ def apply(target,result):
             (target.users_collection[0] if target.users_collection else bpy.context.scene.collection).objects.link(arm)
             arm.parent=target;arm.matrix_parent_inverse=target.matrix_world.inverted();arm.matrix_world=target.matrix_world.copy()
             arm['ek_oral_owner']=target
+        backup_collection=A.new_collection('EK_覆盖前备份')
         backup=target.copy();backup.name=target.name+'_EK_覆盖前备份';backup[A.TAG]=True
-        A.new_collection('EK_覆盖前备份').objects.link(backup);backup.hide_set(True);backup.hide_render=True
+        backup_collection.objects.link(backup);backup.hide_set(True);backup.hide_render=True
+        if previous_arm and not arm:
+            # The backup must keep the old driver semantics. Copy the armature
+            # before the live one is retargeted, then point the backup's own
+            # modifier and owner at the copy: it still reads the old Key.
+            backup_arm=previous_arm.copy();backup_arm.data=previous_arm.data.copy()
+            backup_arm.name=previous_arm.name+'_EK_覆盖前备份'
+            backup_collection.objects.link(backup_arm)
+            backup_arm.parent=backup;backup_arm.matrix_parent_inverse=previous_arm.matrix_parent_inverse.copy()
+            backup_arm.matrix_world=previous_arm.matrix_world.copy()
+            backup_arm['ek_oral_owner']=backup
+            backup_arm.hide_set(True);backup_arm.hide_render=True
+            for backup_modifier in backup.modifiers:
+                if backup_modifier.type=='ARMATURE' and backup_modifier.object==previous_arm:
+                    backup_modifier.object=backup_arm
+            if backup.get('ek_oral_armature')==previous_arm:backup['ek_oral_armature']=backup_arm
         target.data=staged.data
         if arm:
             mod=target.modifiers.new('EK_口腔刚性约束','ARMATURE');mod.object=arm
             # Deform rigid groups before the target's existing body rig.
             with bpy.context.temp_override(object=target,active_object=target):
                 bpy.ops.object.modifier_move_to_index(modifier=mod.name,index=0)
-            target['ek_oral_armature']=arm;target['ek_oral_poses']=result['ek_oral_poses'];rebuild_drivers(target);arm.hide_set(True)
+            target['ek_oral_armature']=arm
+            # Batches accumulate: keep earlier batches' poses, let this batch override same-named keys.
+            merged=json.loads(previous_poses) if previous_poses else {}
+            for kind,rows in json.loads(result['ek_oral_poses']).items():merged.setdefault(kind,{}).update(rows)
+            target['ek_oral_poses']=json.dumps(merged);rebuild_drivers(target);arm.hide_set(True)
+        elif previous_arm:
+            # This batch adds no armature. Keep the earlier armature, its poses
+            # and its modifier exactly as they were; only its Key references
+            # must follow the staged mesh. rebuild_drivers() is deliberately
+            # not called here because it would clear unknown drivers.
+            rebound=retarget_drivers(previous_arm,old.shape_keys,new_key)
+            rebound+=retarget_drivers(previous_arm.data,old.shape_keys,new_key)
         else:
             for name in ('ek_oral_armature','ek_oral_poses'):
                 if name in target:del target[name]
-        for old_mod in list(target.modifiers):
-            if old_mod!=mod and old_mod.type=='ARMATURE' and old_mod.object and old_mod.object.get('ek_oral_owner')==target:
-                target.modifiers.remove(old_mod)
+        if arm or not previous_arm:
+            for old_mod in list(target.modifiers):
+                if old_mod!=mod and old_mod.type=='ARMATURE' and old_mod.object and old_mod.object.get('ek_oral_owner')==target:
+                    target.modifiers.remove(old_mod)
         partition=result.get('ek_procedural_partition')
         if partition:
             from . import region_guides as G
@@ -251,11 +301,13 @@ def apply(target,result):
         return len(incoming)-1,backup,[]
     except Exception:
         target.data=old
+        restore_driver_targets(rebound,new_key,old.shape_keys)
         for name,value in (('ek_oral_armature',previous_arm),('ek_oral_poses',previous_poses)):
             if value is not None:target[name]=value
             elif name in target:del target[name]
         if mod:target.modifiers.remove(mod)
         for group in new_groups:target.vertex_groups.remove(group)
+        if backup_arm:bpy.data.objects.remove(backup_arm,do_unlink=True)
         if arm:bpy.data.objects.remove(arm,do_unlink=True)
         if backup:bpy.data.objects.remove(backup,do_unlink=True)
         raise

@@ -98,14 +98,27 @@ class Solver:
                 quality=dict(quality,face_follower_vertices=len(followers.vertices))
                 result=delta,effective,shapes,quality,Custom.capture_curves(self.rig,delta)
             delta,effective,shapes,quality,curves=result
-            delta,sections=Lashes.follow_lash_sections(self.rig,delta,effective)
-            quality=dict(quality,**sections)
-            delta,contact=Lashes.fit_rigid_contact(self.rig,delta,effective)
-            quality=dict(quality,**contact)
-            quality.update(Lashes.audit_attachment(self.rig,delta,effective))
-            quality.update(Lashes.audit_connections(self.rig,delta))
-            quality.update(Lashes.audit_closed_band(self.rig,delta,effective))
-            shapes=C.reattach(self.rig,delta,shapes)
+            if not effective.get('socket_hide_weight',0.):
+                delta,sections=Lashes.follow_lash_sections(self.rig,delta,effective)
+                quality=dict(quality,**sections)
+                delta,contact=Lashes.fit_rigid_contact(self.rig,delta,effective)
+                quality=dict(quality,**contact)
+                quality.update(Lashes.audit_attachment(self.rig,delta,effective))
+                quality.update(Lashes.audit_connections(self.rig,delta))
+                quality.update(Lashes.audit_closed_band(self.rig,delta,effective))
+                shapes=C.reattach(self.rig,delta,shapes)
+                shadow=getattr(self.rig,'shadow_followers',None)
+                if shadow is not None:
+                    delta=shadow.apply(delta)
+                    quality['eye_shadow_follow_vertices']=len(shadow.vertices)
+            if effective.get('socket_hide_weight',0.)>0:
+                from . import procedural_socket
+                delta,shapes,socket_quality=procedural_socket.apply(self.rig,delta,shapes,effective['socket_hide_weight'])
+                quality.update(socket_quality)
+                # The tiny eye triangles are intentional, not a failed blink.
+                minimum,rest=Q.minimum_areas(self.rig.points,delta,self.rig.triangles)
+                quality['socket_face_fold_unresolved']=int(np.count_nonzero((rest>1e-14)&(minimum<0.)))
+                quality['unresolved']=quality['socket_face_fold_unresolved']
             result=delta,effective,shapes,quality,Custom.capture_curves(self.rig,delta)
             self.cache[key]=result
             self.rig.last_oral_deformation=result[2];self.rig.last_expression_curves=result[4]
@@ -115,6 +128,13 @@ class Solver:
     def independent(self,recipe,weight,allow_symmetry):
         rig=self.rig;available(rig,recipe)
         effective=E.merge([recipe],[weight]);effective['name']=recipe['name']
+        if effective.get('socket_hide_weight',0.)>0:
+            # Socket removal is a scale operation; never enter eyelid/lash solvers.
+            if not hasattr(rig,'_custom_original_entries'):
+                rig._custom_original_entries={e['key']:copy.deepcopy(e['points']) for e in rig.snapshot['entries']}
+                rig._custom_lash_lines=dict(rig.lash_lines);rig._custom_field=rig.field
+            delta=np.zeros_like(rig.points)
+            return delta,effective,{},dict(unresolved=0),Custom.capture_curves(rig,delta)
         for eye in effective.get('eyes',{}).values():
             if eye.get('smile',0.)>.5:
                 eye['lash_shape_preserve']=float(getattr(rig,'style_options',{}).get('smile_preserve',eye.get('lash_shape_preserve',.85)))

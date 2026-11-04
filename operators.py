@@ -179,7 +179,9 @@ def add_key(ob, name):
     """Create an empty shape key and return it."""
     ensure_shape_keys(ob)
     try:
-        return ob.shape_key_add(name=name, from_mix=False)
+        key = ob.shape_key_add(name=name, from_mix=False)
+        key.value = 0.0
+        return key
     except TypeError:                     # pragma: no cover - signature drift
         return ob.data.shape_keys.key_blocks.new(name=name)
 

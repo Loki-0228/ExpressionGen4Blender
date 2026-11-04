@@ -121,7 +121,6 @@ def relax_lash_card(rest,edges,roots,target,initial,weld=True,stitches=()):
 def return_lash_tip_targets(rig,side,ids,edges,rest,posed,delta,recipe):
     """Turn a hanging outer return toward the closing lower rim."""
     closure=float(np.clip(recipe.get('eyes',{}).get(str(side),{}).get('closure',0.),0.,1.))
-    if closure<=0:return [],[]
     width=rig.widths['EYE',side]
     lower={k for k,i in enumerate(ids) if not is_upper(rig,side,int(i))}
     neighbors=[set() for _ in ids]
@@ -162,6 +161,11 @@ def return_lash_tip_targets(rig,side,ids,edges,rest,posed,delta,recipe):
         order=np.argsort(closed[:,0])
         height=np.interp(goal[0],closed[order,0],closed[order,2])
         goal[2]+=(height-goal[2])*closure
+        # Even without closure the lower lid/corner can move. Retain the
+        # authored offset to that branch instead of leaving the hook on
+        # the upper lid transform. Closure blends toward the seam target.
+        followed=rest[tip]+sample(u)-line.sample(u)
+        goal=followed*(1.-closure)+goal*closure
         tips.append(tip);targets.append(goal)
         if len(local)>3:
             distance=np.linalg.norm(rest[local]-rest[tip],axis=1)
@@ -169,6 +173,9 @@ def return_lash_tip_targets(rig,side,ids,edges,rest,posed,delta,recipe):
             if middle!=tip:
                 mid=posed[boundary].mean(0)+turn@(posed[middle]-posed[boundary].mean(0))
                 mid[2]+=(np.interp(mid[0],closed[order,0],closed[order,2])-mid[2])*closure
+                mu=line.project(rest[middle])[0]
+                followed=rest[middle]+sample(mu)-line.sample(mu)
+                mid=followed*(1.-closure)+mid*closure
                 tips.append(middle);targets.append(mid)
     return tips,targets
 
@@ -726,6 +733,10 @@ def cover_closed_seam(rig,delta,recipe):
         if side not in rig.rings or eye['closure']<1-1e-6:continue
         band=upper_band(rig,side)
         if not band:continue
+        # Start full closures with a small coherent downward overlap. The
+        # coverage/contact solve below can still correct actual intersections.
+        upper_ids=upper_vertices(rig,side)
+        delta[upper_ids,2]-=rig.widths['EYE',side]*.003
         posed=rig.points+delta;ids=upper_vertices(rig,side)
         rim=sorted({i for i,u,upper in rig.rows['EYE',side]},key=lambda i:posed[i,0])
         x,inverse=np.unique(posed[rim,0],return_inverse=True)
@@ -1173,7 +1184,8 @@ def finish_upper_sweep(rig,delta,recipe,lids,only_open=False):
         # A closing arc changes height and depth, not the material's span.
         # Ordinary blinks retain the original inner-corner correction.
         lock_span=rest_controls is not None and not explicit
-        ordinary=eye.get('smile',0.)<=.5 and eye.get('flat',0.)<=.5
+        # A smile closure follows the plain blink's span profile; locking X to the open eye pushed the outer tips outward.
+        ordinary=eye.get('flat',0.)<=.5
         inner_end=0. if abs(base.sample(0.)[0]-rig.info['plane'])<abs(base.sample(1.)[0]-rig.info['plane']) else 1.
         def make_transport(base,centre_controls,controls,folds,rest_controls,seam_controls,seam_lo,seam_span,inset,depth_inset,lock_span,ordinary,inner_end):
             def centre(t):
@@ -1265,7 +1277,7 @@ def prepare_open_rim(rig,delta,recipe,lids):
             # cross-section. Rotating its long transverse offset folds the
             # inner rim across the fixed lower canthus and into the nose.
             target=point+transport(anchor)[0]-anchor
-            
+
             if explicit:
                 floor=float(np.interp(target[0],lower_curve[:,0],lower_curve[:,2]))
                 target[2]=min(max(target[2],floor),point[2])
@@ -1299,7 +1311,7 @@ def update_open_depth(rig,profiles):
                 return posed,frame,axis
             return follow
         follow=updated(transport,before,after)
-        
+
         rig.lash_open_transports[side]=follow
     rig.lash_final_transports=dict(rig.lash_open_transports)
 
@@ -1357,7 +1369,7 @@ def lower_owned_upper_sections(rig,delta,recipe):
     for group in getattr(rig,'lash_return_groups',[]):
         side=group['side'];eye=recipe.get('eyes',{}).get(str(side),{})
         closure=float(eye.get('closure',0.))
-        if closure<1-1e-6:continue
+        if not eye:continue
         ids=group['vertices'];host=set(owners[group['parent']]['vertices'])
         triangles=[list(t) for t,f in rig.mesh_triangles if set(t)<=host]
         if not triangles:continue
@@ -1371,6 +1383,15 @@ def lower_owned_upper_sections(rig,delta,recipe):
         transport=rig.lash_final_transports.get(side)
         frame=transport(root)[1] if transport else np.eye(3)
         anchor=weights@posed[triangle]+frame@(root-np.asarray(hit))
+        if closure<1-1e-6:
+            # Open-eye actions also move the parent band. Keep the complete
+            # returned card in its parent's frame rather than bending its
+            # tip independently toward a different lower-lid section.
+            for i in ids:
+                target=anchor+frame@(rig.points[i]-root)
+                delta[i]=target-rig.points[i]
+            report['upper_lash_lower_follow_vertices']+=len(ids)
+            continue
         tip=rig.points[max(ids,key=lambda i:np.linalg.norm(rig.points[i]-root))]
         source=tip-root
         lower,follow=rig.lash_lower_transports[side]
@@ -1479,7 +1500,7 @@ def cover_lower_band(rig,delta,recipe):
             controls=np.column_stack((np.linspace(0,1,4),np.zeros(4),np.zeros(4)))
             controls,conflicts=B.bounded_height(controls,t,low,high)
             shift=B.bezier(controls,(x-origin)/span)[:,2]
-            
+
             delta[local,2]+=shift
             report['lower_lid_order_vertices']+=int(np.count_nonzero(abs(shift)>width*1e-8))
         posed=rig.points+delta
@@ -1711,7 +1732,9 @@ def deform(rig,delta,recipe,lids,shared_closed=False):
         length=float(np.linalg.norm(tip-root))
         if length<1e-9:continue
         final=getattr(rig,'lash_final_transports',{}).get(side)
-        use_shared=((shared_closed and eye.get('closure', 0.0) >= 1 - 1e-06) and final is not None and np.allclose(unit['base'], unit['points'], atol=1e-10, rtol=0))
+        # Smile and flat full closures take the shared centreline on the first
+        # deform; ordinary blinks share only after the band solve.
+        use_shared=((shared_closed or eye.get('smile', 0.) > .5 or eye.get('flat', 0.) > .5) and eye.get('closure', 0.0) >= 1 - 1e-06 and final is not None and np.allclose(unit['base'], unit['points'], atol=1e-10, rtol=0))
         transport=final(root) if final else rig.lash_transport(side,root,lid,eye['closure'],eye.get('lash_shape_preserve',0.),eye.get('flat',0.))
         if transport is not None:
             guide_root,motion,hinge=transport
@@ -1887,7 +1910,7 @@ def follow_legacy_closed_strands(rig,delta,recipe,lids):
     are copied back, so they cannot trigger a different main-band contact pose.
     Edited strands and every shared root retain the original deformation.
     """
-    
+
     eyes={side:eye for side,eye in recipe.get('eyes',{}).items() if eye.get('closure',0.)>=1-1e-6}
     if not eyes or not rig.lashes:return delta,{}
     trial=dict(recipe,eyes=eyes)

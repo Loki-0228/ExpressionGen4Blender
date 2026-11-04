@@ -143,8 +143,8 @@ class EKREG_Settings(bpy.types.PropertyGroup):
     reverse_target: bpy.props.BoolProperty(name='目标法线反向', default=False)
     manual_label: bpy.props.IntProperty(name='手动分区编号', default=-1, min=-1,
                                       options={'HIDDEN'},update=focus_changed)
-    manual_number: bpy.props.IntProperty(name='手动分区编号',default=-1,min=-1,max=6,
-        description='0 面部，1 眉睫，2 瞳孔与高光，3 眼白，4 口腔，5 牙齿，6 舌头，-1 不参与表情',
+    manual_number: bpy.props.IntProperty(name='手动分区编号',default=-1,min=-1,max=7,
+        description='0 面部，1 眉睫，2 瞳孔与高光，3 眼白，4 口腔，5 牙齿，6 舌头，7 目影，-1 不参与表情',
         **region_core.region_number_accessors('manual_label'))
     focus_region:bpy.props.BoolProperty(name='优先显示目前分区',default=False,update=focus_changed,
         description='当前编号的分区以 95% 不透明度透过显示；其他分区以 15% 不透明度显示并保留深度遮挡，仅影响工作副本视口')
@@ -605,8 +605,18 @@ class EKREG_OT_finish(bpy.types.Operator):
             from .procedural_ui import options_match
             if not options_match(context.scene.exprkit_procedural,output,s.close_neutral_mouth):
                 raise ValueError('生成设置已改变，请重新生成并检查结果后确认')
-            count,backup,children=K.apply(s.target,output)
-            s.message='已将 %d 个表情写入「%s」，保留原材质；覆盖前备份：%s' % (count,output['ek_confirmed_target'].name,backup.name)
+            from . import material_expressions as Cards
+            Cards.unembed(output)
+            try:count,backup,children=K.apply(s.target,output)
+            except Exception:
+                Cards.embed(output);raise
+            card_error=''
+            try:
+                children=list(children)+Cards.commit(s.target,output)
+            except Exception as card_exc:
+                card_error='；卡片写回失败：'+str(card_exc)
+            Cards.embed(output)
+            s.message='已将 %d 个表情写入「%s」，保留原材质；覆盖前备份：%s%s' % (count,output['ek_confirmed_target'].name,backup.name,card_error)
             S.restore(context,final=output.get('ek_confirmed_target'))
             for child in children:
                 child.hide_viewport=s.target.hide_viewport
@@ -780,6 +790,7 @@ class EKREG_PT_correct(bpy.types.Panel):
         if s.manual_label in (8,9):layout.prop(s,'oral_group')
         layout.label(text='0 面部 · 1 眉睫 · 2 瞳孔与高光')
         layout.label(text='3 眼白 · 4 口腔 · 5 牙齿 · 6 舌头')
+        layout.label(text='7 目影')
         layout.label(text='-1 不参与表情')
         layout.operator('exprkit_regions.manual', text='将所选面标记到此分区')
         mirror = disclosure(layout, s, 'show_mirror', '半脸同步')
@@ -879,8 +890,9 @@ class EKREG_PT_generate(bpy.types.Panel):
             from .procedural_ui import expression_options
             expression_options(settings,options)
         layout.prop(options,'force_symmetry')
-        from .procedural_ui import style_options
+        from .procedural_ui import style_options, card_options
         style_options(layout,options)
+        card_options(layout,options)
         layout.prop(s,'close_neutral_mouth')
         # Use identical containers before, during and after generation. Adding
         # a busy-only box starts a panel alignment animation that cannot finish

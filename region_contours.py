@@ -518,11 +518,17 @@ def face_openings(polygons, labels, points):
     """
     edges=defaultdict(int)
     oral_edges=set()
+    # Face overlays may reuse every vertex of the skin (for example blush).
+    # Count that surface once or duplicate triangles erase its open boundaries.
+    seen_face_polygons=set()
     for poly,label in zip(polygons,labels):
         if label in ORAL_REGIONS:
             oral_edges.update(tuple(sorted((a,b))) for a,b in zip(poly,poly[1:]+poly[:1]))
         if label!=0:
             continue
+        signature=tuple(sorted(poly))
+        if signature in seen_face_polygons:continue
+        seen_face_polygons.add(signature)
         for a,b in zip(poly,poly[1:]+poly[:1]):
             edges[tuple(sorted((a,b)))]+=1
     graph=defaultdict(set)
