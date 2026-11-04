@@ -17,7 +17,10 @@ def part_pose(rig,recipe,kind):
     center=rig.original_points[pivot_ids].mean(0)
     pose=recipe.get('oral',{}).get(owner,{})
     rotation=np.asarray(pose.get('rotation',np.eye(3)))
-    translation=np.asarray(pose.get('translation',np.zeros(3)))*rig.widths['LIP',0]
+    translation=np.asarray(pose.get('translation',np.zeros(3)),dtype=float)
+    if np.any(translation):
+        if ('LIP',0) not in rig.widths:raise ValueError('牙齿位移需要可靠的嘴唇宽度，请先修正嘴唇分区')
+        translation=translation*rig.widths['LIP',0]
     return ids,center,rotation,translation
 
 

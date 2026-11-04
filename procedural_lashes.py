@@ -329,7 +329,14 @@ def follow_lash_sections(rig,delta,recipe):
             if len(roots)<3:continue
             rest=rig.points[ids];source=rest[roots];target=source+movement[roots]
             center=source.mean(0);destination=target.mean(0)
-            u,_,vh=np.linalg.svd((source-center).T@(target-destination))
+            covariance=(source-center).T@(target-destination)
+            # Lid roots approach a straight line on closure. Their positional
+            # fit alone leaves the rotation around that line undetermined and
+            # can flip the entire lash card behind the eye. Retain the front
+            # direction while choosing the initial rigid frame; root targets
+            # remain exact in the subsequent constrained relaxation.
+            covariance[1,1]+=max(float(np.sum((source-center)**2)),1e-20)*.1
+            u,_,vh=np.linalg.svd(covariance)
             transform=vh.T@u.T
             if np.linalg.det(transform)<0:
                 vh[-1]*=-1;transform=vh.T@u.T

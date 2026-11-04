@@ -101,7 +101,8 @@ def partition(target, label):
 
 
 def _material(name, texture, tint):
-    mat=bpy.data.materials.get(name) or bpy.data.materials.new(name)
+    # Independent node drivers belong to this generated card only.
+    mat=bpy.data.materials.new(name)
     mat[TAG]=True;mat.diffuse_color=tint
     if hasattr(mat,'blend_method'):mat.blend_method='BLEND'
     if hasattr(mat,'shadow_method'):mat.shadow_method='NONE'
@@ -304,6 +305,26 @@ def apply_keys(card, shown, expressions, follow=None):
         key.slider_min=0.;key.slider_max=1.;key.value=0.
         source=(follow or {}).get(name)
         if source:follow_driver(card,name,source[0],source[1])
+    # A hidden mesh can be exposed when a different morph closes an eye hole.
+    # Gate opacity by this card's own keys, in addition to retracting its mesh.
+    if card.data.materials:
+        mat=card.data.materials[0];nodes=mat.node_tree.nodes;links=mat.node_tree.links
+        shader=next((n for n in nodes if n.type=='BSDF_PRINCIPLED'),None)
+        if shader is not None:
+            alpha=shader.inputs['Alpha'];gate=nodes.new('ShaderNodeMath')
+            gate.name='EK_expression_visibility';gate.operation='MULTIPLY'
+            if alpha.is_linked:links.new(alpha.links[0].from_socket,gate.inputs[0])
+            else:gate.inputs[0].default_value=alpha.default_value
+            gate.inputs[1].default_value=0.;links.new(gate.outputs[0],alpha)
+            if expressions:
+                driver=gate.inputs[1].driver_add('default_value').driver;driver.type='SCRIPTED'
+                names=[]
+                for index,name in enumerate(expressions):
+                    variable=driver.variables.new();variable.name='v'+str(index);variable.type='SINGLE_PROP'
+                    variable.targets[0].id_type='KEY';variable.targets[0].id=card.data.shape_keys
+                    variable.targets[0].data_path=card.data.shape_keys.key_blocks[name].path_from_id('value')
+                    names.append(variable.name)
+                driver.expression='min(1,max(0,'+'+'.join(names)+'))'
     return card
 
 
@@ -684,6 +705,16 @@ def commit(target, output):
         copy=card.copy();copy.data=card.data.copy();copy.name=base
         (target.users_collection[0] if target.users_collection else bpy.context.scene.collection).objects.link(copy)
         copy.parent=target
+        # Preserve the gate when card geometry/keys are copied for writeback.
+        for index,mat in enumerate(copy.data.materials):
+            if mat is None:continue
+            mat=mat.copy();copy.data.materials[index]=mat
+            animation=mat.node_tree.animation_data if mat.use_nodes else None
+            if animation:
+                for curve in animation.drivers:
+                    for variable in curve.driver.variables:
+                        for ref in variable.targets:
+                            if ref.id==card.data.shape_keys:ref.id=copy.data.shape_keys
         # Cards were authored in world space; keep their placement when the
         # result and the target have different transforms.
         copy.matrix_parent_inverse=target.matrix_world.inverted()

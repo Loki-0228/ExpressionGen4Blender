@@ -3,7 +3,7 @@
 bl_info = {
     "name": "ExpressionGen",
     "author": "ExpressionGen",
-    "version": (2, 1, 5),
+    "version": (2, 1, 6),
     # Current node interfaces, GPU shader names and UILayout.progress use
     # Blender 4.0 APIs; expression generation does not require Blender 4.5.
     "blender": (4, 0, 0),
