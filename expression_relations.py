@@ -54,7 +54,7 @@ def available(rig,recipe):
         raise ValueError(rig.incomplete.get(('LIP',0),'缺少可靠的嘴唇边界'))
     if any(int(s) not in rig.rings for s in recipe.get('eyes',{})):raise ValueError('该表情所需的眼部校正曲线不完整')
     if recipe.get('brows') and (not rig.brows or any(e['kind']=='BROW' and str(e['side']) in recipe['brows'] for e in rig.snapshot.get('suppressed',[]))):raise ValueError('该表情所需的眉毛校正曲线不完整')
-    if (family=='tongue' or recipe.get('tongue')) and not rig.tongue:raise ValueError('缺少舌头分区或校正曲线')
+    if Rules.requires_tongue(recipe) and not rig.tongue:raise ValueError('缺少舌头分区或校正曲线')
 
 
 def repair(rig,delta,recipe,shapes):
@@ -103,6 +103,11 @@ class Solver:
                 quality=dict(quality,**sections)
                 delta,contact=Lashes.fit_rigid_contact(self.rig,delta,effective)
                 quality=dict(quality,**contact)
+                delta,returns=Lashes.shorten_return_hooks(self.rig,delta,effective)
+                quality=dict(quality,**returns)
+                delta,creases=Lashes.follow_creases(self.rig,delta,effective)
+                quality=dict(quality,**creases)
+                quality['unresolved']=quality.get('unresolved',0)+creases.get('crease_attachment_conflicts',0)
                 quality.update(Lashes.audit_attachment(self.rig,delta,effective))
                 quality.update(Lashes.audit_connections(self.rig,delta))
                 quality.update(Lashes.audit_closed_band(self.rig,delta,effective))
@@ -127,6 +132,9 @@ class Solver:
 
     def independent(self,recipe,weight,allow_symmetry):
         rig=self.rig;available(rig,recipe)
+        if not rig.tongue and 'tongue' in recipe:
+            recipe=dict(recipe)
+            del recipe['tongue']
         effective=E.merge([recipe],[weight]);effective['name']=recipe['name']
         if effective.get('socket_hide_weight',0.)>0:
             # Socket removal is a scale operation; never enter eyelid/lash solvers.
@@ -172,7 +180,7 @@ class Solver:
         weight*=recipe.get('relation_weight',1.)
         relation=recipe['relation'];rig=self.rig;embedded=recipe.get('relation_recipes',{})
         def source(name):
-            value=embedded.get(name) or self.recipes.get(name)
+            value=embedded.get(name) or self.recipes.get(name) or self.recipes.get(Rules.canonical_name(name))
             if value is None:raise ValueError('来源表情不存在：'+name)
             return value
         terms=relation['terms'] if relation['mode']=='COMBINATION' else [dict(source=relation['source'],weight=1.)]

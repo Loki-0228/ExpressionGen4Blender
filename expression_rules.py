@@ -14,6 +14,15 @@ METRICS=('center_x','center_y','center_z','span_x','span_y','span_z','length','a
 CONSTRAINTS=('face_fold','eye_depth','eyelid_direction','lash_attachment','closed_seam','lip_order','cavity_attachment','teeth_follow','tongue_exit')
 
 
+def canonical_name(name):
+    return {'眼孔闭合':'目消し','脸红':'照れ'}.get(name,name)
+
+
+def requires_tongue(recipe):
+    """Only tongue actions and explicitly protruding poses need a tongue."""
+    return recipe.get('family')=='tongue' or ((recipe.get('tongue') or {}).get('protrusion') or 0.)>0.
+
+
 def has_channels(recipe,*keys):
     """Channel presence works for both JSON lists and runtime NumPy arrays."""
     for key in keys:
@@ -98,6 +107,13 @@ def _builtin_profile():
             eye['smile']=1. if name in ('笑い','ウィンク','ウィンク右') else 0.
             eye['lash_shape_preserve']=.85 if eye['smile'] else 0.
             eye['flat']=1. if name in ('なごみ','なごみ左','なごみ右') else 0.
+            if name=='まばたき':
+                # The reference blink also draws the outer canthus inward.
+                # Keep the target eye's own horizontal span for this preset.
+                for branch in ('upper','lower'):
+                    motion=np.asarray(eye[branch],dtype=float).copy()
+                    motion[:,0]=0.
+                    eye[branch]=motion.tolist()
             if name in ('眼角上','眼角下','下眼上','睫下'):
                 # These reference actions are independent controls, not blinks.
                 eye['closure']=0.;eye['smile']=0.
@@ -164,15 +180,13 @@ def _builtin_profile():
         if replacement['name'] in ('はぅ','はちゅ目'):
             replacement['eyes']=copy.deepcopy(closed['eyes'])
             replacement.update(socket_hide=1.,special=True,can_symmetrize=False)
-    compatibility=copy.deepcopy(closed);compatibility['name']='眼孔闭合'
-    data['recipes']=data['recipes']+[closed,compatibility]
+    data['recipes'].append(closed)
     # Card expressions: the reference model drives these with mesh quads; the
     # plugin generates the matching card instead, so each one only needs a key
     # of its own name on the result. An empty recipe yields exactly that.
-    # 脸红 is the procedural blush shell; 照れ is the reference's material blush
-    # (same visible effect) and 目影濃 opens the eye-shadow card.
+    # 照れ opens the procedural cheek shell; 目影濃 opens the eye-shadow card.
     for name in ('はぁと','星目','涙','汗颜','111','1111','11+','怒','！','？','！！','汗',
-                 '脸红','照れ','目影濃'):
+                 '照れ','目影濃'):
         if any(r['name']==name for r in data['recipes']):continue
         data['recipes'].append(dict(name=name,family='custom',eyes={},mouth={},
                                     brows={},oral={},card_expression=True,
@@ -404,7 +418,8 @@ def validate_library(custom):
     if len(set(names))!=len(names):raise ValueError('自定义表情名称重复')
     for spec in custom:validate(spec)
     lookup={r['name']:r for r in _builtin_profile()['recipes']};lookup.update({s['name']:s for s in custom})
-    topological([dict(id=name,recipe=recipe) for name,recipe in lookup.items()],lambda row:dependencies(row['recipe']))
+    topological([dict(id=name,recipe=recipe) for name,recipe in lookup.items()],
+                lambda row:[name if name in lookup else canonical_name(name) for name in dependencies(row['recipe'])])
     return custom
 
 

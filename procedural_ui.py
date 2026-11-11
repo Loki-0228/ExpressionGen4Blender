@@ -3,6 +3,7 @@ import json,textwrap
 import bpy
 from bpy_extras.io_utils import ExportHelper
 from . import procedural_generate as P,procedural_rig as R,region_blender as A,region_guides as G,region_session as S,region_commit as K
+from .procedural_texture import BLUSH_BLUR
 
 
 FAMILIES=(('eye','眼睑与睫毛'),('brow','眉毛'),('mouth','嘴型'),('tongue','吐舌与舌宽'),('jaw','下颌'),('custom','自定义表情'))
@@ -86,9 +87,13 @@ def generation_options(settings):
         # Generation always uses the full preset action. Saved strengths from
         # earlier versions are deliberately not read from collection items.
         weights[name]=1.
+    styles=dict(smile_arc=settings.smile_arc,smile_preserve=settings.smile_preserve,
+                blink_style=settings.blink_style,smile_style=settings.smile_style)
+    styles.update(blush_range=settings.blush_range,blush_blur=settings.blush_blur,
+                  blink_corner_follow=settings.blink_corner_follow,blink_arc=settings.blink_arc,
+                  lash_return_shorten=settings.lash_return_shorten)
     return dict(selection=selected,recipe_strengths=weights,force_symmetry=settings.force_symmetry,compute_backend=settings.compute_backend,
-                lower_lid_scale=settings.lower_lid_participation,
-                style_options=dict(smile_arc=settings.smile_arc,smile_preserve=settings.smile_preserve))
+                lower_lid_scale=settings.lower_lid_participation,style_options=styles)
 
 
 def options_match(settings,output,close_mouth):
@@ -134,12 +139,24 @@ class EKPROC_Settings(bpy.types.PropertyGroup):
     combination:bpy.props.StringProperty(name='组合名称',default='组合表情')
     show_options:bpy.props.BoolProperty(name='表情选择',default=False,update=options_opened)
     show_styles:bpy.props.BoolProperty(name='风格设置',default=False)
+    blush_range:bpy.props.FloatProperty(name='腮红范围',default=1.,min=.4,max=1.8,description='调整双颊着色范围，增大时优先向两侧扩散')
+    blush_blur:bpy.props.FloatProperty(name='腮红模糊度',default=BLUSH_BLUR,min=0.,max=1.,subtype='FACTOR',description='让腮红边缘变柔和，主要向横向扩散')
     lower_lid_participation:bpy.props.FloatProperty(name='下眼睑参与量',default=1.,min=0.,max=1.,
         description='在允许范围内调整闭合线高度；越小越多由上眼睑完成闭合。闭眼接合与下眼睑移动上限始终生效')
-    smile_arc:bpy.props.FloatProperty(name='笑眼弧度',default=1.,min=.15,max=1.,
-        description='调整笑闭眼向上拱起的弧度，始终保留向上弧线，并受闭合边界限制')
-    smile_preserve:bpy.props.FloatProperty(name='笑眼形态保持',default=.85,min=0.,max=1.,
+    blink_arc:bpy.props.FloatProperty(name='普通闭眼弧度',default=1.5,min=.25,max=2.5,
+        description='普通闭眼的 U 形弯曲程度，尽量让最低点位于眼睛中部；受眼睑移动边界限制')
+    blink_style:bpy.props.FloatProperty(name='普通闭眼风格化',default=1.,min=0.,max=1.,subtype='FACTOR',
+        description='0 为两端持平的对称 U 形，1 保留原眼角倾斜与弧底偏移；受闭合边界限制')
+    smile_style:bpy.props.FloatProperty(name='微笑闭眼风格化',default=1.,min=0.,max=1.,subtype='FACTOR',
+        description='0 为两端持平的对称上拱弧，1 保留原眼角倾斜与弧顶偏移；与普通闭眼独立')
+    blink_corner_follow:bpy.props.FloatProperty(name='闭眼外眼角跟随',default=0.,min=0.,max=1.,subtype='FACTOR',
+        description='普通闭眼时，高外眼角向相邻下眼睑靠拢的程度')
+    smile_arc:bpy.props.FloatProperty(name='微笑闭眼弧度',default=1.,min=.15,max=1.,
+        description='调整微笑闭眼向上拱起的弧度，始终保留向上弧线，并受闭合边界限制')
+    smile_preserve:bpy.props.FloatProperty(name='微笑闭眼形态保持',default=.85,min=0.,max=1.,
         description='保留上眼线的整体形态；闭合、贴脸及厚度约束优先于形态保持')
+    lash_return_shorten:bpy.props.FloatProperty(name='回钩收短',default=1.,min=0.,max=1.,subtype='FACTOR',
+        description='随闭眼收短眼角回钩中段；保留两端、主睫毛宽度和原贴合偏移，0 关闭此修正')
     message:bpy.props.StringProperty(default='只需需添加表情的模型及面部分区，无需源模型')
 
 
@@ -147,7 +164,11 @@ def style_options(layout,settings):
     layout.prop(settings,'show_styles',text='风格设置',icon='TRIA_DOWN' if settings.show_styles else 'TRIA_RIGHT',emboss=False)
     if settings.show_styles:
         column=layout.column(align=True)
-        for name in ('lower_lid_participation','smile_arc','smile_preserve'):column.prop(settings,name,slider=True)
+        for names in (('lower_lid_participation',),('blink_style','blink_arc','blink_corner_follow'),
+                      ('smile_style','smile_arc','smile_preserve'),('lash_return_shorten',),('blush_range','blush_blur')):
+            group=column.column(align=True)
+            for name in names:group.prop(settings,name,slider=True)
+            column.separator()
 
 
 def visible_choices(settings):
@@ -244,7 +265,7 @@ def flush(context):
 
 class EKPROC_OT_work(bpy.types.Operator):
     bl_idname='exprkit_procedural.work';bl_label='程序化表情操作';bl_options={'REGISTER','UNDO'}
-    action:bpy.props.EnumProperty(items=[(s,s,'') for s in ('USE_CURRENT','PREPARE','SELECT','MARK','GUIDES','CURVE','LASH','CURVE_PREVIEW','GENERATE','COMBINE','RESULT','FINISH','RESTORE')])
+    action:bpy.props.EnumProperty(items=[(s,s,'') for s in ('USE_CURRENT','PREPARE','SELECT','MARK','GUIDES','CURVE','LASH','CURVE_PREVIEW','GENERATE','COMBINE','RESULT','FINISH','RESTORE','TONGUE')])
     def invoke(self,context,event):
         if self.action=='GENERATE':
             from . import generation_job
@@ -276,31 +297,25 @@ class EKPROC_OT_work(bpy.types.Operator):
             elif self.action=='SELECT':
                 S.focus(context,s.working);context.tool_settings.mesh_select_mode=(False,False,True)
                 if context.mode!='EDIT_MESH':bpy.ops.object.mode_set(mode='EDIT')
-            elif self.action in ('MARK','LASH'):
+            elif self.action in ('MARK','LASH','TONGUE'):
                 if context.object!=s.working or context.mode!='EDIT_MESH':raise ValueError('请在目标分区副本中进入选面模式')
-                flush(context);ids=[p.index for p in s.working.data.polygons if p.select]
+                s.working.update_from_editmode()
+                ids=[p.index for p in s.working.data.polygons if p.select and not p.hide]
                 if not ids:raise ValueError('请先选择需要标记的面')
                 if self.action=='LASH':
                     if not s.collection:raise ValueError('请先生成检查曲线')
+                    flush(context)
                     G.manual_lash(s.collection,s.working,s.working,'TARGET',ids)
                     for vertex in s.working.data.vertices:vertex.select=False
                     for edge in s.working.data.edges:edge.select=False
                     for face in s.working.data.polygons:face.select=False
+                    bpy.ops.object.mode_set(mode='EDIT')
                 else:
-                    value=int(s.label);label=value//10 if value>=80 else value
-                    labels=R.mesh_regions(s.working);slot=next((p.material_index for p,l in zip(s.working.data.polygons,labels) if l==label),None)
-                    if slot is None:
-                        known=json.loads(s.working.get('ek_standard_slot_labels','{}'))
-                        slot=next((int(k) for k,v in known.items() if v==label and int(k)<len(s.working.data.materials)),None)
-                    if slot is None:
-                        slot=len(s.working.data.materials);s.working.data.materials.append(A.marker_material(A.marker_name(label),A.region_color(label)))
-                    mapping=json.loads(s.working.get('ek_standard_slot_labels','{}'));mapping[str(slot)]=label
-                    s.working['ek_standard_slot_labels']=json.dumps(mapping)
-                    attribute=s.working.data.attributes.get('ek_procedural_oral_group') or s.working.data.attributes.new('ek_procedural_oral_group','INT','FACE')
-                    for i in ids:
-                        s.working.data.polygons[i].material_index=slot;attribute.data[i].value=(1 if value%10==1 else -1) if value>=80 else 0
+                    value=12 if self.action=='TONGUE' else int(s.label)
+                    label,group={81:(8,1),82:(8,-1),91:(9,1),92:(9,-1)}.get(value,(value,0))
+                    A.manual_assign(s.working,label,group)
                     if s.collection:s.collection['ek_guide_needs_refresh']=True
-                bpy.ops.object.mode_set(mode='EDIT');s.message='已标记；后续生成直接读取当前编辑'
+                s.message='已标记；后续生成直接读取当前编辑'
             elif self.action in ('GUIDES','CURVE'):
                 flush(context)
                 if self.action=='GUIDES':
@@ -536,6 +551,7 @@ class EKPROC_PT_panel(bpy.types.Panel):
         button(l,'PREPARE','创建目标分区副本',bool(s.target))
         if s.working:
             button(l,'SELECT','选中分区副本并选面');l.prop(s,'label');button(l,'MARK','标记所选面')
+            button(l,'TONGUE','将所选面标为舌头')
         l.separator();l.label(text='2 · 轮廓校正')
         lash_options(l,s,s.collection)
         button(l,'GUIDES','生成 / 补齐校正曲线',bool(s.working))

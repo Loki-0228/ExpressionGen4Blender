@@ -187,6 +187,27 @@ def resolve(points, polygons, parts, plane, rings, surface_support=True):
                 record.update(kind='LASH',reason='eyelid_surface_support',is_band=True,confidence=.9,
                               surface_support=support,surface_upper=bool(support[1]>=support[0]))
 
+        # An authored thick eyeliner can sit slightly in front of the socket.
+        # Its surface still covers the rim in front projection, unlike a
+        # parallel crease above it. Boundary distance alone mislabels the
+        # complete band (and its attached tips) as a crease on these meshes.
+        for item in work:
+            record=item['record'];ring=item['ring'];width=record['eye_width']
+            if record['kind'] not in ('UNRESOLVED','CREASE') or record['span']<.24:continue
+            if item['offset']>max(float(ring.frame.height)*.15,width*.08):continue
+            origin=float(coordinates[record['vertices'],1].min()-width)
+            support=[]
+            for upper in (False,True):
+                curve=np.array([ring.sample(t,upper) for t in np.linspace(0,1,97)])
+                lengths=np.linalg.norm(np.diff(curve,axis=0),axis=1);covered=0.
+                for p,length in zip((curve[:-1]+curve[1:])*.5,lengths):
+                    hit,_,_,_=item['tree'].ray_cast(Vector((p[0],origin,p[2])),Vector((0,1,0)),width*3.)
+                    if hit is not None and -width*.15<=hit.y-p[1]<=width*.025:covered+=length
+                support.append(float(covered/width))
+            if max(support)>=.24:
+                record.update(kind='LASH',reason='eyelid_projected_surface_support',is_band=True,confidence=.85,
+                              surface_support=support,surface_upper=bool(support[1]>=support[0]))
+
     # Hosts are fixed before assigning fragments. A chain of weak neighbors
     # cannot merge a brow and an eyelash band into one semantic component.
     hosts = [item for item in work if item['record']['kind'] != 'UNRESOLVED']

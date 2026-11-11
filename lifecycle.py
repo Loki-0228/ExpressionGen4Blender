@@ -1,7 +1,7 @@
 """Register the addon and preserve current settings across RNA reloads."""
 import bpy
 
-SETTINGS=('exprkit_regions','exprkit_procedural','exprkit_rules')
+SETTINGS=('exprkit_regions','exprkit_procedural','exprkit_rules','exprkit_topology')
 
 
 def plain(value):

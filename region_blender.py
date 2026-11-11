@@ -673,9 +673,9 @@ def evaluate_standard(standard, target, tolerance_fraction=0.10, normal_min=0.15
     return dict(result,source=standard.name,target=target.name)
 
 
-def manual_assign(preview, label):
-    label=region_core.canonical_region(label)
+def manual_assign(preview,label,oral_group=0):
     """Selected polygons override automatic labels. Kept on reclassification."""
+    label=region_core.canonical_region(label)
     check_mesh(preview)
     if not is_working(preview):
         raise ValueError('请选择本插件的分区预览副本')
@@ -695,17 +695,23 @@ def manual_assign(preview, label):
         import bmesh
         bm = bmesh.from_edit_mesh(preview.data)
         bm.faces.ensure_lookup_table()
+        group=bm.faces.layers.int.get('ek_procedural_oral_group')
+        if oral_group and group is None:group=bm.faces.layers.int.new('ek_procedural_oral_group')
         for face in bm.faces:
-            if face.select:
+            if face.select and not face.hide:
                 manual[str(face.index)] = label
                 face.material_index = slots[str(label)]
+                if group is not None:face[group]=oral_group
                 count += 1
         bmesh.update_edit_mesh(preview.data)
     else:
+        group=preview.data.attributes.get('ek_procedural_oral_group')
+        if oral_group and group is None:group=preview.data.attributes.new('ek_procedural_oral_group','INT','FACE')
         for face in preview.data.polygons:
-            if face.select:
+            if face.select and not face.hide:
                 manual[str(face.index)] = label
                 face.material_index = slots[str(label)]
+                if group is not None:group.data[face.index].value=oral_group
                 count += 1
     preview['ek_manual_overrides'] = json.dumps(manual)
     return count

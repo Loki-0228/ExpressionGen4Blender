@@ -1,7 +1,7 @@
 """Shrink each eye aperture and its layers about its own centre.
 
-A local radial falloff carries nearby Face vertices. Eye layers and lashes
-share the same uniform scale; ordinary eyelid and lash deformation is bypassed.
+A local radial falloff carries nearby Face vertices. Lashes shrink uniformly,
+while the split eye layers converge behind the skin without visible triangles.
 """
 import numpy as np
 import json
@@ -89,18 +89,18 @@ def _controls(eye_skin,side):
 def _hidden_groups(rig):
     """Split the eye stack, eye shadow and lash/brow strips away from Face.
 
-    A vertex shared with Face stays on the skin path: it is a host for
-    hide_behind_face and must not also be a target. This mirrors the existing
-    accessory-occlusion convention.
+    The writer splits eye layer vertices shared with Face. The skin copy stays
+    on the skin path, and the eye copy must receive the separate eye pose.
     """
     members=getattr(rig,'members',None) or []
     eye=[];eye_static=[];lash=[]
     for index,value in enumerate(members):
         labels=_labels(value)
-        if FACE in labels:continue
-        if labels.intersection(EYE):
+        if labels.intersection(STATIC_EYE):
             eye.append(index)
-            if labels.intersection(STATIC_EYE):eye_static.append(index)
+            eye_static.append(index)
+        elif FACE in labels:continue
+        elif labels.intersection(EYE):eye.append(index)
         elif LASH in labels:lash.append(index)
     return (np.asarray(sorted(eye),dtype=np.int64),
             np.asarray(sorted(eye_static),dtype=np.int64),
@@ -201,9 +201,15 @@ def apply(rig,delta,shapes,weight=1.):
     hidden_all=np.asarray(sorted(set(eye_ids.tolist())|set(eye_ids_lash.tolist())),dtype=np.int64)
     for side,row in rims.items():
         ids=hidden_all[np.where(posed[hidden_all,0]>=plane,1,-1)==side]
-        # Lashes and eye layers use exactly the same centre and scale. No
-        # independent lash twist, tip fitting, or closest-face projection.
+        # Lashes and shadow shrink without twist or tip fitting.
         hidden[ids]=(row['centre']-posed[ids])*(1.-COLLAPSE)
+        # At full weight even the small residual aperture must not show a
+        # white pixel. Collapse every eye triangle to one point behind its rim.
+        eye_side=eye_static[np.where(posed[eye_static,0]>=plane,1,-1)==side]
+        retreat=row['span'][0]*.10
+        hidden[ids,1]+=retreat
+        eye_target=row['centre']+np.array([0.,retreat,0.])
+        hidden[eye_side]=eye_target-posed[eye_side]
     result=delta+weight*smooth
     if eye_ids_lash.size:result[eye_ids_lash]+=weight*hidden[eye_ids_lash]
     original=getattr(rig,'original_points',None)

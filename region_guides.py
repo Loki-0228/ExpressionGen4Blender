@@ -325,12 +325,19 @@ def capture(source,target,alignment,entries,source_transform,retire_lashes=False
                 ob['ek_guide_key']=retained;ob['ek_guide_entry']=dumps(previous)
                 existing[retained]=existing.pop(key);known.pop(key,None)
     incoming_keys={entry['key'] for entry in entries}
-    if retire_lashes:
+    if retire_lashes or preserve_shapes:
         for key,ob in existing.items():
             previous=json.loads(ob.get('ek_guide_entry','{}'))
             if previous.get('kind') not in accessory_kinds or previous.get('manual') or ':manual' in str(key):continue
             if key not in incoming_keys and is_active(ob) and not edited(ob,target):
-                ob['ek_auto_inactive']=True
+                # Generation refreshes ownership without discovering new
+                # strands. Retire stale automatic crease/brow ownership when
+                # the same complete surface is now a supported eyelid band.
+                band={i for entry in entries if entry['role']==previous.get('role') and entry['kind']=='LASH_LINE'
+                      for field in ('vertices','lower_vertices') for i in entry.get(field,[])}
+                vertices=set(previous.get('vertices',[]))
+                if retire_lashes or (previous.get('kind') in ('BROW','CREASE') and vertices and vertices<=band):
+                    ob['ek_auto_inactive']=True
             elif key in incoming_keys and ob.get('ek_auto_inactive'):
                 del ob['ek_auto_inactive']
     created=[]

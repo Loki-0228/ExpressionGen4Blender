@@ -149,7 +149,7 @@ def open_lid_rule(rig,side,motion):
     return lid
 
 
-def character_arc(upper,corners,ends,height,smile=0.,flat=0.):
+def character_arc(upper,corners,ends,height,smile=0.,flat=0.,stylization=1.,lower=None):
     """Reflect the current upper guide's curvature about its canthus chord.
 
     Only the fitted curve residual changes sign. The mesh, canthus tilt and
@@ -161,6 +161,15 @@ def character_arc(upper,corners,ends,height,smile=0.,flat=0.):
     z=np.bincount(inverse,weights=upper[:,2])/np.bincount(inverse)
     residual=np.interp(t,x,z)-((1-t)*corners[0,2]+t*corners[1,2])
     residual-=residual[0]*(1-t)+residual[-1]*t
+    if lower is not None and smile>0.:
+        lower_x=np.clip((lower[:,0]-corners[0,0])/span,0.,1.)
+        lower_x,inverse=np.unique(lower_x,return_inverse=True)
+        lower_z=np.bincount(inverse,weights=lower[:,2])/np.bincount(inverse)
+        lower_bow=np.interp(t,lower_x,lower_z)-((1-t)*corners[0,2]+t*corners[1,2])
+        lower_bow-=lower_bow[0]*(1-t)+lower_bow[-1]*t
+        # Ordinary closure reflects the upper guide. A smile recruits the
+        # lower lid and reflects its bowl upward; it is a distinct source.
+        residual=residual*(1-smile)-lower_bow*smile
     basis=np.column_stack((3*(1-t)**2*t,3*(1-t)*t*t))
     handles=np.linalg.lstsq(basis,residual,rcond=None)[0]
     # Fit one bracket rather than an S bend. Projection onto the concavity
@@ -176,11 +185,20 @@ def character_arc(upper,corners,ends,height,smile=0.,flat=0.):
     # Tall apertures must not turn the closed line into an equally tall bow.
     # Measure curvature in eye widths, retaining the current arch's shape.
     gain=min(1.,span*(.06+.08*smile)/max(top,1e-12));handles*=gain;curve*=gain;top*=gain
+    stylization=float(np.clip(stylization,0.,1.))
+    ends=np.array(ends,copy=True)
+    # Anatomical travel can place the chord, but must not define its style.
+    # In particular, a lowered canthus must not turn the entire ordinary
+    # blink into a trace of the resting lower lid.
+    ends[:,2]=ends[:,2].mean()+(corners[:,2]-corners[:,2].mean())*stylization
+    handles=handles.mean()+(handles-handles.mean())*stylization
+    curve=basis@handles;top=float(np.max(curve))
     peak=float(np.mean(t[curve>=top-max(top*1e-5,1e-12)])) if top>1e-12 else .5
     controls=np.linspace(ends[0],ends[1],4)
     controls[1:3,2]+=handles*(2*smile-1)*(1-flat)
-    return controls,peak,dict(method='current_upper_guide_chord_reflection',peak=peak,
-                              height_ratio=top/max(height,1e-12),flat=float(flat))
+    method='current_lower_guide_chord_reflection' if lower is not None and smile>.5 else 'current_upper_guide_chord_reflection'
+    return controls,peak,dict(method=method,peak=peak,
+                              height_ratio=top/max(height,1e-12),flat=float(flat),stylization=stylization)
 
 
 def mouth_outline(rig,reference,u,upper):
@@ -347,9 +365,19 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
         original_lower=rig.original_points[lower_ids]
         inner_floor=B.lower_body_height(original_lower,rig.info['plane'])
         rig.inner_lid_floors[side]=inner_floor
+        outer_end=1-inner_end
+        outer_drop=0.
         if directional and not globe:
             target=max(inner_floor+lower_limit*.65,corners[inner_end,2]-height*.45)
             corner_moves[inner_end,2]=min(target-corners[inner_end,2],0.)
+            if closure>=1-1e-6 and smile<.5 and eye.get('flat',0.)<.5:
+                corner_follow=float(np.clip(styles.get('blink_corner_follow',0.),0.,1.))
+                # Follow the adjacent lower lid body instead of dragging a
+                # high outer endpoint through the whole closed eyelid.
+                t=.25 if outer_end==0 else .75
+                body=np.interp(left+(right-left)*t,low[:,0],low[:,2])+height*.08
+                outer_drop=min(float(body-corners[outer_end,2]),0.)*corner_follow
+                corner_moves[outer_end,2]=outer_drop
         # Fit one whole closure arc in the edited target's position/tilt frame.
         # Do not copy the lower rim's local polygon or sampling irregularities.
         flat=float(np.clip(eye.get('flat',0.),0,1))
@@ -358,7 +386,11 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
         # by replacing the endpoints with a clamped horizontal baseline.
         ts=np.linspace(0,1,129)
         ends=corners+corner_moves
-        seam_controls,peak,arc_report=character_arc(clouds[1],corners,ends,height,smile,flat)
+        stylization=float(np.clip(styles.get('smile_style' if smile>.5 else 'blink_style',1.),0.,1.))
+        seam_controls,peak,arc_report=character_arc(clouds[1],corners,ends,height,smile,flat,stylization,lower=clouds[0])
+        if smile<=.5 and flat<=.5:
+            chord=np.linspace(seam_controls[0,2],seam_controls[-1,2],4)
+            seam_controls[:,2]=chord+(seam_controls[:,2]-chord)*float(np.clip(styles.get('blink_arc',1.5),.25,2.5))
         if smile>.5 and flat<.5:
             chord=np.linspace(seam_controls[0,2],seam_controls[-1,2],4)
             handles=seam_controls[1:3,2]-chord[1:3]
@@ -377,19 +409,11 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
         seam_low=np.interp(left+(right-left)*ts,low[:,0],low[:,2])
         seam_high=np.minimum(cap,np.interp(left+(right-left)*ts,clouds[1][:,0],clouds[1][:,2]))
         if globe and directional:
-            # Blink follows the lower rim; a smile meets above the canthus
-            # chord. Merely adding a small lift to the lower bowl leaves both
-            # expressions concave and visually indistinguishable.
-            chord=seam_low[0]*(1-ts)+seam_low[-1]*ts
-            smile_arc=float(np.clip(styles.get('smile_arc',1.),.15,1.))
-            smile_z=chord+height*.18*smile_arc*4*ts*(1-ts)
-            native=np.column_stack((left+(right-left)*ts,
-                np.interp(left+(right-left)*ts,low[:,0],low[:,1]),
-                seam_low*(1-smile)+smile_z*smile))
-            seam_controls=B.fit_bezier(native,ts)
-            arc_report['method']='globe_smile_arch' if smile>.5 else 'globe_lower_rim_closure'
+            # Globe contact controls depth and travel, not the planar style.
+            # Keep the same upper/lower guide source as other eye anatomy.
+            arc_report['anatomy']='spherical'
             arc_report['lower_lid_max_rise_ratio']=lower_limit/height
-        styled=(smile>.5 or flat>.5) and not globe
+        styled=smile>.5 or flat>.5
         if directional:
             if closure>=1-1e-6 and not globe:
                 # Only the steep canthus portion rotates down. The horizontal
@@ -405,11 +429,34 @@ def solve(rig,recipe,profile,lower_lid_scale=1.):
                 q=np.clip(distance/.22,0,1);relax=1-q**3*(10-15*q+6*q*q)
                 seam_low=np.minimum(seam_low,seam_low*(1-relax)+inner_floor*relax)
                 seam_low[inner]=np.maximum(seam_low[inner],inner_floor)
+                if outer_drop<0.:
+                    distance=ts if outer_end==0 else 1-ts
+                    q=np.clip(distance/.30,0.,1.)
+                    taper=1.-q**3*(10.-15.*q+6.*q*q)
+                    seam_low+=outer_drop*taper
             seam_high=np.maximum(seam_high,seam_low)
             if styled:
                 seam_controls,conflicts,style=B.styled_closure(seam_controls,ts,seam_low,seam_high,flat=flat>.5,preference=lid_scale)
                 arc_report.update(style)
-            else:
+            elif closure>=1-1e-6 and smile<=.5 and flat<=.5:
+                # Keep the entire seam convex, including the corners. A
+                # pointwise clamp can reverse the bow or kink the contour.
+                try:
+                    seam_controls,conflicts,style=B.styled_closure(
+                        seam_controls,ts,seam_low,seam_high,preference=lid_scale,downward=True,centered=True)
+                except B.ClosureStyleError:
+                    # A very tilted aperture may prevent a central valley.
+                    # Retain a downward bow before trying a general bound fit.
+                    try:
+                        seam_controls,conflicts,style=B.styled_closure(
+                            seam_controls,ts,seam_low,seam_high,preference=lid_scale,downward=True)
+                    except B.ClosureStyleError:
+                        arc_report['style_feasible']=False
+                    else:
+                        arc_report.update(style);styled=True
+                else:
+                    arc_report.update(style);styled=True
+            if not styled:
                 seam_controls[:,2]-=(1-lid_scale)*float(np.mean(seam_high-seam_low))
                 seam_controls,conflicts=B.bounded_height(seam_controls,ts,seam_low,seam_high)
             arc_report.update(direction_priority=True,curvature_bound_conflicts=conflicts)

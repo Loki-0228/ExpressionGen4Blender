@@ -99,7 +99,7 @@ def detect(ob,process_lashes=None,*,fill_lashes=True,recover_lashes=False):
                 entry['_edited']=G.edited(guide,ob);marked.append(entry)
             if recover_lashes and entry.get('kind')=='LASH_LINE' and G.is_active(guide) and not G.edited(guide,ob):
                 supported={i for row in info['accessory_ownership']['components']
-                           if row['side']==entry['side'] and row.get('reason')=='eyelid_surface_support'
+                           if row['side']==entry['side'] and row.get('reason') in ('eyelid_surface_support','eyelid_projected_surface_support')
                            for i in row['vertices']}
                 if supported-set(entry.get('vertices',[])):repair_lines[entry['key']]=guide
     entries,_=G.detection_entries(info['points'],info['points'],info['faces'],info['faces'],info['parts'],info['parts'],
@@ -310,7 +310,7 @@ class Rig:
                 self.lash_upper.update((i,False) for i in entry.get('lower_vertices',[]) if 0<=i<len(self.points) and i not in self.brows|self.creases)
         for unit in self.lashes:self.lash_upper.update((i,True) for i in unit['vertices'])
         supported_hosts={r['id'] for r in self.info['accessory_ownership']['components']
-                         if r.get('reason')=='eyelid_surface_support'}
+                         if r.get('reason') in ('eyelid_surface_support','eyelid_projected_surface_support')}
         corner_groups=[r for r in self.info['accessory_ownership']['components'] if r.get('parent') in supported_hosts]
         self.lash_return_groups=[]
         for group in {r['id']:r for r in self.recovered_lash_groups+corner_groups}.values():
@@ -394,9 +394,7 @@ class Rig:
             # A single connected cavity remains one part; do not cut its mesh.
             for branch,indices in groups.items():
                 if indices:self.oral_parts[kind+'_'+branch]=indices
-        # Explicit Tongue labels authorize internal motion even when its
-        # position prevented automatic guide detection. The guide is optional.
-        self.tongue=[i for i,labels in enumerate(self.members) if 12 in labels and 0 not in labels] if self.info['mouth'] else []
+        self.tongue=[i for i,labels in enumerate(self.members) if 12 in labels and 0 not in labels] if self.info['mouth'] and self.tongue_entry() else []
         self.points,self.tongue_report=Tongue.neutral(self)
         if self.tongue_report['reason']=='ambiguous_tongue_plane':
             self.warnings.append('舌头的主体平面不明确，Basis 保留原姿态，请检查 Tongue 分区')

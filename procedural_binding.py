@@ -145,7 +145,7 @@ def upward_handles(handles):
     return min(candidates,key=lambda h:float(np.sum((h-values)**2)))
 
 
-def _closure_tilt_feasible(parameters,bow,low,high,candidate,minimum_gain):
+def _closure_tilt_feasible(parameters,bow,low,high,candidate,minimum_gain,extra=()):
     """Resolve the normalized tilt/gain polygon after eliminating translation.
 
     Every lower sample must be below every upper sample after the common
@@ -167,6 +167,9 @@ def _closure_tilt_feasible(parameters,bow,low,high,candidate,minimum_gain):
                       (tilt_high,gain_high),(tilt_low,gain_high)),dtype=float)
     normals=np.stack((t[:,None]-t[None,:],bow[:,None]-bow[None,:]),axis=-1).reshape((-1,2))
     bounds=(low[:,None]-high[None,:]).ravel()
+    if extra:
+        normals=np.vstack((normals,[row for row,bound in extra]))
+        bounds=np.r_[bounds,[bound for row,bound in extra]]
     for normal,bound in zip(normals,bounds):
         length=float(np.linalg.norm(normal))
         if length<=np.finfo(float).eps:
@@ -191,7 +194,8 @@ def _closure_tilt_feasible(parameters,bow,low,high,candidate,minimum_gain):
     target=np.asarray(candidate[1:],dtype=float);metric=np.array((4.,1.))
     shifted_low=low-target[0]*(t-.5)-target[1]*bow
     shifted_high=high-target[0]*(t-.5)-target[1]*bow
-    if not (gain_low<=target[1]<=gain_high and shifted_low.max()<=shifted_high.min()):
+    if not (gain_low<=target[1]<=gain_high and shifted_low.max()<=shifted_high.min()
+            and all(np.asarray(row)@target>=bound-epsilon for row,bound in extra)):
         choices=[]
         for a,b in zip(polygon,np.roll(polygon,-1,axis=0)):
             edge=b-a;norm=float((edge*metric)@edge)
@@ -206,7 +210,7 @@ def _closure_tilt_feasible(parameters,bow,low,high,candidate,minimum_gain):
     return np.array((shift,tilt,gain))
 
 
-def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
+def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.,downward=False,centered=False):
     """Translate a whole bow/line and reduce its bow without reversing it.
 
     First solve common Z shift and curvature gain with the original chord.
@@ -215,6 +219,10 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
     a fallback without changing the aperture or reversing the bow.
     """
     result=np.asarray(controls).copy();t=np.asarray(parameters)
+    if downward:
+        result[:,2]*=-1
+        lower,upper=-np.asarray(upper),-np.asarray(lower)
+        preference=1.-preference
     lower=np.asarray(lower);upper=np.maximum(upper,lower)
     chord=np.linspace(result[0,2],result[3,2],4)
     if flat:chord[:]=float(np.mean(chord))
@@ -231,9 +239,17 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
     bow=np.column_stack((3*(1-t)**2*t,3*(1-t)*t*t))@handles
     baseline=(1-t)*chord[0]+t*chord[-1]
     low=lower-baseline;high=upper-baseline
+    minimum_gain=.25 if centered and not flat else .02 if not flat else 0.
+    extra=[]
+    if centered and not flat:
+        # Concavity alone allows a slanted line with its minimum outside the
+        # eye. Put the bowl/arch extremum in the central half of the aperture.
+        for u,sign in ((.25,1.),(.75,-1.)):
+            slope=3*((1-4*u+3*u*u)*handles[0]+(2*u-3*u*u)*handles[1])
+            extra.append(([sign,sign*slope/scale],-sign*(chord[-1]-chord[0])/scale))
     difference=bow[:,None]-bow[None,:];need=low[:,None]-high[None,:]
     positive=difference>tolerance;negative=difference<-tolerance
-    minimum=max(.02 if not flat else 0.,float(np.max(need[positive]/difference[positive])) if np.any(positive) else 0.)
+    minimum=max(minimum_gain,float(np.max(need[positive]/difference[positive])) if np.any(positive) else 0.)
     maximum=min(1.,float(np.min(need[negative]/difference[negative])) if np.any(negative) else 1.)
     feasible=minimum<=maximum+1e-9 and not np.any(need[~(positive|negative)]>tolerance)
     gain=float(np.clip(maximum,minimum,1.)) if feasible else (0. if flat else 1.)
@@ -242,6 +258,7 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
     # cannot relax either lid's movement boundary.
     lo=float(np.max(low-gain*bow))
     shift=lo+(hi-lo)*float(np.clip(preference,0,1))
+    feasible=feasible and all(np.asarray(row)@np.array((0.,gain))>=bound-tolerance/scale for row,bound in extra)
     solver='interval';solve_failed=False
     if not feasible:
         # A slanted original canthus chord may prevent a pure translation.
@@ -249,7 +266,10 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
         # horizontal-lid bounds, rather than clipping it into a bowl.
         design=np.column_stack((np.ones(len(t)),t-.5,bow/scale))
         rows=np.vstack((design,-design,(0.,0.,1.),(0.,0.,-1.)))
-        limits=np.r_[high,-low,scale if not flat else 0.,-scale*.02 if not flat else 0.]
+        limits=np.r_[high,-low,scale if not flat else 0.,-scale*minimum_gain]
+        if extra:
+            rows=np.vstack((rows,[[0.,-row[0],-row[1]] for row,bound in extra]))
+            limits=np.r_[limits,[-bound*scale for row,bound in extra]]
         values=np.array((shift,0.,gain*scale));memory=np.zeros_like(rows)
         metric=np.diag((1.,.25,1.));directions=rows@metric;norm=np.sum(rows*directions,axis=1)
         solver='projection'
@@ -262,7 +282,7 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
             if np.max(abs(values-previous))<tolerance and np.max(rows@values-limits)<tolerance:break
         if np.max(rows@values-limits)>tolerance:
             fallback=_closure_tilt_feasible(t,bow/scale,low/scale,high/scale,
-                                            values/scale,0. if flat else .02)
+                                            values/scale,minimum_gain,extra)
             solver='feasible_polygon'
             if fallback is None:solve_failed=True
             else:values=np.array((fallback[0]*scale,fallback[1]*scale,fallback[2]*scale))
@@ -271,10 +291,12 @@ def styled_closure(controls,parameters,lower,upper,flat=False,preference=1.):
     height=bezier(result,t)[:,2]
     conflicts=int(np.count_nonzero((height<lower-tolerance)|(height>upper+tolerance)))
     if conflicts or solve_failed:
-        raise ClosureStyleError(('平直闭眼' if flat else '笑闭眼')+'曲率与当前眼睑移动边界冲突，请检查眼角转折及校正曲线；未输出变形错误的表情')
-    return result,conflicts,dict(style='flat' if flat else 'upward',style_gain=gain,
-        style_translation=float(shift),style_tilt=float(tilt),style_bound_conflicts=conflicts,style_feasible=True,
-        style_feasibility_solver=solver)
+        raise ClosureStyleError(('平直闭眼' if flat else '普通闭眼' if downward else '微笑闭眼')+'曲率与当前眼睑移动边界冲突，请检查眼角转折及校正曲线；未输出变形错误的表情')
+    sign=-1. if downward else 1.
+    result[:,2]*=sign
+    return result,conflicts,dict(style='flat' if flat else 'downward' if downward else 'upward',style_gain=gain,
+        style_translation=float(shift*sign),style_tilt=float(tilt*sign),style_bound_conflicts=conflicts,style_feasible=True,
+        style_feasibility_solver=solver,style_centered=bool(centered))
 
 
 def planar_frame(controls,u):

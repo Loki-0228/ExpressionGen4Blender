@@ -9,7 +9,7 @@ from . import procedural_rig as R,procedural_atoms as E,region_blender as A,regi
 from .region_rigid_parts import RigidTeeth
 from . import expression_rules as Rules
 
-VERSION=51
+VERSION=52
 
 
 @lru_cache(maxsize=8)
@@ -67,11 +67,18 @@ def prepare(target,partition=None,allow_unmarked=False,partition_method='GEOMETR
         coordinates=[p.co.copy() for p in ob.data.shape_keys.reference_key.data];ob.shape_key_clear()
         for p,co in zip(ob.data.vertices,coordinates):p.co=co
     ob.modifiers.clear();ob.data.materials.clear()
-    # 目影 (13) is never inferred from geometry, but its marker material must exist
-    # so the user can paint it without first creating a slot.
-    slots={label:i for i,label in enumerate(sorted(set(labels)|{-1,13}))}
+    # Keep empty manual slots for teeth, tongue, and native eye shadow.
+    slots={label:i for i,label in enumerate(sorted(set(labels)|{-1,9,12,13}))}
     for label in slots:ob.data.materials.append(A.marker_material(A.marker_name(label),A.region_color(label)))
     for poly,label in zip(ob.data.polygons,labels):poly.material_index=slots[label]
+    if not ob.data.attributes.get('ek_procedural_oral_group'):
+        groups=[A.region_core.dental_group(slot.material.name) if slot.material else 0
+                for slot in target.material_slots]
+        values=[groups[p.material_index] if label==9 and p.material_index<len(groups) else 0
+                for p,label in zip(target.data.polygons,labels)]
+        if any(values):
+            attribute=ob.data.attributes.new('ek_procedural_oral_group','INT','FACE')
+            attribute.data.foreach_set('value',values)
     ob['ek_standard_slot_labels']=json.dumps({str(slot):label for label,slot in slots.items()})
     ob['ek_region_slots']=json.dumps({str(label):slot for label,slot in slots.items()})
     ob['ek_partition_detection']=json.dumps(report,ensure_ascii=False)
@@ -122,6 +129,7 @@ def generate(target,partition,collection,families=None,strength=1.,lower_lid_sca
             families=sorted(families) if families else None,recipe_strengths=recipe_strengths or {},style_options=style_options or {},rule_signature=rule_signature())
     if progress:progress('建立面部与口腔约束')
     rig=R.Rig(partition,snapshot,close_mouth);rig.progress=progress;rig.style_options=dict(style_options or {});data=profile()
+    if selection is not None:selection={Rules.canonical_name(name) for name in selection}
     recipes=[r for r in data['recipes'] if (not families or r['family'] in families) and (selection is None or r['name'] in selection)]
     if not recipes:raise ValueError('请至少选择一个表情')
     weights={r['name']:float(np.clip(strength, .05, 1.))*float(np.clip((recipe_strengths or {}).get(r['name'],1.), .0025, 1.)) for r in recipes}
@@ -135,7 +143,7 @@ def generate(target,partition,collection,families=None,strength=1.,lower_lid_sca
         if (family in ('mouth','tongue','jaw') or Rules.has_channels(recipe,'mouth','mouth_reference','mouth_targets','tongue','jaw')) and not rig.info['mouth']:reason=rig.incomplete.get(('LIP',0),'缺少可靠的嘴唇边界')
         if any(int(s) not in rig.rings for s in recipe['eyes']):reason='该表情所需的眼部校正曲线不完整，保留未生成状态'
         if recipe.get('brows') and (not rig.brows or any(e['kind']=='BROW' and str(e['side']) in recipe['brows'] for e in snapshot.get('suppressed',[]))):reason='该表情所需的眉毛校正曲线不完整'
-        if (family=='tongue' or recipe.get('tongue')) and not rig.tongue:reason='缺少 Tongue 分区或舌头校正曲线'
+        if Rules.requires_tongue(recipe) and not rig.tongue:reason='舌头动作缺少 Tongue 分区或舌头校正曲线'
         if reason:skipped.append(dict(name=recipe['name'],reason=reason));continue
         try:delta,effective,oral,quality,curves=solver.solve(recipe,weights[recipe['name']])
         except ValueError as exc:
@@ -192,6 +200,9 @@ def generate(target,partition,collection,families=None,strength=1.,lower_lid_sca
         if not mesh.users:bpy.data.meshes.remove(mesh)
         raise
     output['ek_procedural_version']=VERSION;output['ek_procedural_partition']=partition
+    output['ek_card_eye_rim_origins']=json.dumps({
+        side:sorted({vertex for vertex,_,_ in rows})
+        for (kind,side),rows in rig.rows.items() if kind=='EYE'})
     output['ek_procedural_hash']=snapshot['hash'];output['ek_procedural_input']=snapshot['input']
     output['ek_procedural_settings']=json.dumps(dict(strength=strength,lower_lid_scale=lower_lid_scale,close_mouth=close_mouth,
         process_lashes=snapshot.get('process_lashes',True),recipe_weights=weights,style_options=rig.style_options,compute_backend=compute_backend,constraint_mode='LEGACY',
@@ -297,6 +308,8 @@ def combine(target,partition,collection,output,name='组合表情',progress=None
     data=profile();lookup=json.loads(output['ek_effective_recipes']);keys=output.data.shape_keys.key_blocks
     selected=[(lookup[key.name],key.value) for key in keys if key.name in lookup and key.value>0]
     if not selected:raise ValueError('先在结果形态键中设置需要组合的表情权重')
+    if any('native_closed_weight' in recipe for recipe,_ in selected):
+        raise ValueError('旧版直接复用的原生闭眼请先重新生成，再参与程序化组合')
     settings=json.loads(output['ek_procedural_settings'])
     from . import procedural_gpu as GPU
     GPU.configure(settings.get('compute_backend','AUTO'))

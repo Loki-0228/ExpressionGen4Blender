@@ -395,6 +395,7 @@ class EKREG_OT_tongue(bpy.types.Operator):
             active=A.check_mesh(context.view_layer.objects.active)
             if active!=ob or ob.mode!='EDIT':
                 raise ValueError('请点击「进入分区副本选面」，选中舌头面后再标记')
+            ob.update_from_editmode()
             indices=[p.index for p in ob.data.polygons if p.select and not p.hide]
             if not indices:raise ValueError('请先在分区副本中选择舌头面')
             labels=T.mesh_regions(ob)
@@ -403,8 +404,10 @@ class EKREG_OT_tongue(bpy.types.Operator):
                 s.message='所选面已属于舌头分区'
                 S.focus(context,ob)
                 return {'FINISHED'}
+            if not any(label==0 and i not in indices for i,label in enumerate(labels)):
+                raise ValueError('请仅选择舌头面，保留其余 Face 面部分区')
             S.begin(context)
-            _,count=T.mark_tongue(ob,face_indices=indices)
+            count=A.manual_assign(ob,12)
             for old in (s.fitted,s.transferred):
                 if old:A.set_hidden_if_present(old,view_layer=context.view_layer)
             if s.guide_collection:s.guide_collection['ek_guide_needs_refresh']=True
@@ -497,22 +500,10 @@ class EKREG_OT_manual(bpy.types.Operator):
             if context.view_layer.objects.active != s.preview:
                 raise ValueError('请选中目标预览副本并选择需要调整的面')
             S.begin(context)
-            count = A.manual_assign(s.preview, s.manual_label)
+            value={'AUTO':0,'UPPER':1,'LOWER':-1}[s.oral_group] if s.manual_label in (8,9) else 0
+            count = A.manual_assign(s.preview,s.manual_label,value)
             if not count:
                 raise ValueError('没有选中的面')
-            if count:
-                value={'AUTO':0,'UPPER':1,'LOWER':-1}[s.oral_group] if s.manual_label in (8,9) else 0
-                if s.preview.mode=='EDIT':
-                    import bmesh
-                    bm=bmesh.from_edit_mesh(s.preview.data)
-                    layer=bm.faces.layers.int.get('ek_procedural_oral_group') or bm.faces.layers.int.new('ek_procedural_oral_group')
-                    for face in bm.faces:
-                        if face.select:face[layer]=value
-                    bmesh.update_edit_mesh(s.preview.data)
-                else:
-                    attribute=s.preview.data.attributes.get('ek_procedural_oral_group') or s.preview.data.attributes.new('ek_procedural_oral_group','INT','FACE')
-                    for face in s.preview.data.polygons:
-                        if face.select:attribute.data[face.index].value=value
             s.message = '已手动标记 %d 面，重新分区时保留' % count
             if s.guide_collection:s.guide_collection['ek_guide_needs_refresh']=True
             S.focus(context,s.preview)
@@ -793,6 +784,7 @@ class EKREG_PT_correct(bpy.types.Panel):
         layout.label(text='7 目影')
         layout.label(text='-1 不参与表情')
         layout.operator('exprkit_regions.manual', text='将所选面标记到此分区')
+        layout.operator('exprkit_regions.tongue', text='将所选面标为舌头')
         mirror = disclosure(layout, s, 'show_mirror', '半脸同步')
         if mirror is not None:
             mirror.prop(s, 'mirror_direction')

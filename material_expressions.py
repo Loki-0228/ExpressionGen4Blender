@@ -33,6 +33,7 @@ REGION=13
 EYEWHITE=7
 EYE_LABELS=(3,7)                  # pupil/highlight and eye white
 EYE_CARDS=('はぁと','星目')        # cards that live inside the eye
+REPLACEMENT_EYES=('はぅ','はちゅ目')
 SKIN_EYE_LABELS=(0,3,7)           # skin, pupil and eye white; lashes and brows excluded
 SKIN_EYE_CARDS=('涙',)             # cards that run from the eye onto the cheek
 # A bare string would iterate character by character and break the path.
@@ -176,9 +177,91 @@ def _spec_expressions(spec):
     return names
 
 
+def shadow_band(target,spec,collection):
+    """Fit each strip to the visible opening, even without a sclera material."""
+    from .region_detection import _projected_depth
+
+    points=face_points(target)
+    rims=eye_card_rims(target)
+    polygons=[list(face.vertices) for face in target.data.polygons]
+    eye_faces=partition(target,3)+partition(target,EYEWHITE)
+    front=[];hidden=[];faces=[];uvs=[];offset=0
+    columns=max(int(spec['columns']),3);rows=max(int(spec['rows']),2)
+    band=float(spec['band'])
+    for ids in rims.values():
+        rim=set(ids)
+        edges=np.array([tuple(edge.vertices) for edge in target.data.edges
+                        if all(i in rim for i in edge.vertices)],dtype=int)
+        cloud=points[ids]
+        width=float(np.ptp(cloud[:,0]))
+        if not len(edges) or width<=1e-10:continue
+        a,b=points[edges[:,0]],points[edges[:,1]]
+        extent=b[:,0]-a[:,0]
+        valid=abs(extent)>width*1e-8
+        if not np.any(valid):continue
+        a,b,extent=a[valid],b[valid],extent[valid]
+        # Include the rim's own X knots so the strip cannot bridge a lid corner.
+        # Inset the ends slightly to keep the strip's triangles nondegenerate.
+        centre=float(cloud[:,0].min()+width*.5)
+        radius=width*.5*float(np.clip(float(spec.get('expand',1.))*.9,.05,.98))
+        low,high=centre-radius,centre+radius
+        x=np.unique(np.r_[np.linspace(low,high,columns),cloud[(cloud[:,0]>low)&(cloud[:,0]<high),0]])
+        t=(x[:,None]-a[:,0])/extent
+        crossing=(t>=-1e-8)&(t<=1+1e-8)
+        x,t,crossing=x[crossing.any(1)],t[crossing.any(1)],crossing[crossing.any(1)]
+        if len(x)<3:continue
+        z=a[:,2]+t*(b[:,2]-a[:,2])
+        top_edge=np.where(crossing,z,-np.inf).argmax(1)
+        top=z[np.arange(len(x)),top_edge]
+        upper_depth=a[top_edge,1]+t[np.arange(len(x)),top_edge]*(b[top_edge,1]-a[top_edge,1])
+        bottom=z[np.arange(len(x)),np.where(crossing,z,np.inf).argmin(1)]
+        keep=(top-bottom)>width*1e-5
+        x,top,bottom,upper_depth=x[keep],top[keep],bottom[keep],upper_depth[keep]
+        if len(x)<3:continue
+        gap=top-bottom
+        v=np.linspace(0.,1.,rows)
+        z=top-gap*(.005+band*(1.-v[:,None]))
+        x_grid=np.broadcast_to(x,z.shape)
+        footprint=np.column_stack((x_grid.ravel(),z.ravel()))
+        depth=_projected_depth(footprint,eye_faces,polygons,points)
+        # Follow the upper rim depth. Where the eye surface projects in front
+        # of it, lift only enough to keep that part of the overlay visible.
+        depth=np.fmin(depth,np.tile(upper_depth,rows))
+        show=np.column_stack((footprint[:,0],depth-width*max(float(spec['clearance']),.002),footprint[:,1]))
+        hide=show.mean(0)+(show-show.mean(0))*T.COLLAPSE
+        hide[:,1]=max(float(cloud[:,1].max()),float(depth.max()))+width*float(spec['margin'])
+        grid=offset+np.arange(len(show)).reshape(z.shape)
+        faces.extend(T.triangles(grid))
+        uvs.extend(zip(np.tile((x-low)/(high-low),rows),np.repeat(v,len(x))))
+        front.append(show);hidden.append(hide);offset+=len(show)
+    if not faces:raise ValueError('目影缺少可用的眼孔轮廓，请检查眼部校正曲线')
+    front=np.vstack(front);hidden=np.vstack(hidden)
+    name='EK_card_'+spec['name']
+    material=_material(name,spec.get('texture'),tuple(spec['tint']))
+    if not spec.get('texture'):
+        nodes=material.node_tree.nodes;links=material.node_tree.links
+        alpha=next(node for node in nodes if node.type=='BSDF_PRINCIPLED').inputs['Alpha']
+        uv=nodes.new('ShaderNodeTexCoord')
+        separate=nodes.new('ShaderNodeSeparateXYZ')
+        fade=nodes.new('ShaderNodeMapRange');fade.interpolation_type='SMOOTHSTEP'
+        fade.inputs['From Max'].default_value=.2
+        fade.inputs['To Max'].default_value=alpha.default_value
+        links.new(uv.outputs['UV'],separate.inputs[0])
+        links.new(separate.outputs['Y'],fade.inputs['Value'])
+        links.new(fade.outputs[0],alpha)
+    card=_object(name,hidden,faces,material,collection,np.asarray(uvs))
+    card['ek_card_kind']='REGION'
+    card['ek_card_region']=REGION
+    card['ek_card_expressions']=json.dumps(_spec_expressions(spec),ensure_ascii=False)
+    card['ek_card_fit']=json.dumps(dict(show=front.tolist(),hide=hidden.tolist()))
+    return card,front
+
+
 def region_card(target, spec, collection=None):
     """A plane fitted to one partition, lifted off the skin by one clearance."""
     label=int(spec.get('region',REGION))
+    if spec.get('name')=='目影' and label==EYEWHITE and 0.<float(spec.get('band',0.))<1.:
+        return shadow_band(target,spec,collection)
     faces=partition(target,label)
     if not faces:raise ValueError('所选分区没有可用的面：'+spec.get('name','目影'))
     # The shadow band covers the top of the pupil as well as the eye white.
@@ -235,7 +318,7 @@ def region_card(target, spec, collection=None):
 
 
 def shell_card(target, spec, collection=None):
-    """A transparent shell over the whole Face partition, mainly for blush."""
+    """A transparent face shell, restricted to two soft patches for blush."""
     faces=partition(target,0)
     if not faces:raise ValueError('缺少 Face 分区，无法生成曲面罩')
     points=face_points(target)
@@ -250,14 +333,80 @@ def shell_card(target, spec, collection=None):
     # The hidden state sinks by the full nominal offset, not the edge-limited one, so it stays behind the skin.
     full=T.shell(cloud,remap,float(spec.get('offset',T.SHELL_OFFSET)),float(spec.get('scale',1.)),limit=False)
     hidden=cloud+(full-cloud)*-(1.0+float(spec.get('margin',T.MARGIN))*64.)
+    uv=_planar_uv(cloud)
+    blush=spec.get('name') in ('脸红','腮红','照れ') or bool({'脸红','照れ'}&set(_spec_expressions(spec)))
+    if blush:
+        spread=float(spec.get('blush_range',1.))
+        blur=float(spec.get('blush_blur',T.BLUSH_BLUR))
+        cheek_ids,remap,mask_uv=cheek_patches(target,points,cloud,remap,spread,blur)
+        outer=outer[cheek_ids];hidden=hidden[cheek_ids];uv=uv[cheek_ids]
     card=_object('EK_card_'+spec['name'],hidden,remap,
                  _material('EK_card_'+spec['name'],spec.get('texture'),
                            tuple(spec.get('tint',(1,1,1,1)))),collection,
-                 _planar_uv(cloud))
+                 uv)
+    if blush:
+        mask=card.data.uv_layers.new(name='EK_cheek_mask')
+        for loop in card.data.loops:mask.data[loop.index].uv=mask_uv[loop.vertex_index]
+        card.data.uv_layers.active_index=0
+        nodes=card.data.materials[0].node_tree.nodes
+        links=card.data.materials[0].node_tree.links
+        alpha=next(n for n in nodes if n.type=='BSDF_PRINCIPLED').inputs['Alpha']
+        mapping=nodes.new('ShaderNodeUVMap');mapping.uv_map=mask.name
+        radius=nodes.new('ShaderNodeVectorMath');radius.operation='LENGTH'
+        falloff=nodes.new('ShaderNodeMapRange');falloff.interpolation_type='SMOOTHSTEP';falloff.clamp=True
+        falloff.inputs['From Min'].default_value=float(np.clip(.18+.9*(.5-blur),0.,.9))
+        falloff.inputs['From Max'].default_value=1.
+        falloff.inputs['To Min'].default_value=1.
+        falloff.inputs['To Max'].default_value=0.
+        fade=nodes.new('ShaderNodeMath');fade.operation='MULTIPLY'
+        links.new(mapping.outputs['UV'],radius.inputs[0])
+        links.new(radius.outputs['Value'],falloff.inputs['Value'])
+        links.new(falloff.outputs['Result'],fade.inputs[1])
+        if alpha.is_linked:links.new(alpha.links[0].from_socket,fade.inputs[0])
+        else:fade.inputs[0].default_value=alpha.default_value
+        links.new(fade.outputs[0],alpha)
     card['ek_card_kind']='SHELL'
     card['ek_card_expressions']=json.dumps(_spec_expressions(spec),ensure_ascii=False)
     card['ek_card_fit']=json.dumps(dict(show=outer.tolist(),hide=hidden.tolist()),ensure_ascii=False)
     return card,outer
+
+
+def cheek_patches(target, points, skin, faces, spread, blur):
+    """Select front cheek faces and give each side its own elliptical mask."""
+    frame=head_frame(target)
+    centre=frame['center'];width=frame['width'];height=frame['height']
+    rims=eye_card_rims(target)
+    vertices=[];patches=[];mask=[]
+    for side in (-1,1):
+        rim=rims.get(str(side))
+        if rim:
+            cloud=points[rim]
+            eye=(cloud.min(0)+cloud.max(0))*.5
+            eye_width,eye_height=np.ptp(cloud[:,[0,2]],axis=0)
+        else:
+            eye=centre+np.array([side*width*.21,0.,height*.015])
+            eye_width,eye_height=width*.21,height*.12
+        cheek=eye[[0,2]]+np.array([side*eye_width*.06,-eye_height*.93])
+        radii=np.maximum([eye_width*.48,max(eye_height*.46,eye_width*.18)],1e-9)
+        radii*=np.array([spread*(1.+.65*(blur-.5)),1.+.30*(spread-1.)+.16*(blur-.5)])
+        radii[0]=min(radii[0],max(abs(cheek[0]-centre[0])*.92,1e-9))
+        coords=(skin[:,[0,2]]-cheek)/radii
+        selected=[];seen=set()
+        for face in faces:
+            patch=skin[face];projected=coords[face]
+            if np.any(projected.min(0)>1.) or np.any(projected.max(0)<-1.):continue
+            if patch[:,1].mean()>eye[1]+width*.12:continue
+            if np.cross(patch[1]-patch[0],patch[2]-patch[0])[1]>=0.:continue
+            signature=tuple(sorted(face))
+            if signature in seen:continue
+            seen.add(signature)
+            selected.append(face)
+        ids=sorted({i for face in selected for i in face})
+        remap={old:len(vertices)+new for new,old in enumerate(ids)}
+        vertices.extend(ids);mask.extend(coords[ids])
+        patches.extend([[remap[i] for i in face] for face in selected])
+    if not patches:raise ValueError('未找到朝向正面的腮部曲面，无法生成脸红')
+    return vertices,patches,mask
 
 
 def anchor_card(target, spec, collection=None):
@@ -375,12 +524,12 @@ def default_specs():
     ``data/reference_cards.json``.
     """
     return [dict(name='目影',kind='REGION',region=EYEWHITE,texture='',anchor='',
-                 columns=16,rows=3,band=1./3.,clearance=T.CLEARANCE,margin=T.MARGIN,
+                 columns=16,rows=3,band=.27,clearance=T.CLEARANCE,margin=T.MARGIN,
                  offset=T.SHELL_OFFSET,expand=1.12,scale=1.,width=.1,height=.1,
-                 tint=(.06,.05,.07,.30),expressions='目影濃'),
+                 tint=(.014,.014,.014,.30),expressions='目影濃'),
             dict(name='脸红',kind='SHELL',region=0,texture='',anchor='',
                  columns=10,rows=8,clearance=T.CLEARANCE,margin=T.MARGIN,offset=T.SHELL_OFFSET,
-                 scale=1.1,width=.1,height=.1,tint=(1.,.75,.8,.35),expressions='脸红,照れ')]
+                 scale=1.1,width=.1,height=.1,tint=(.95,.24,.34,.46),expressions='照れ')]
 
 
 def spec_from_item(item):
@@ -394,11 +543,7 @@ def spec_from_item(item):
 
 def has_marked_eyeshadow(target):
     """True when the model already provides an eye shadow of its own."""
-    if partition(target,REGION):return True
-    from . import region_core as C
-    for slot in target.material_slots:
-        if slot.material and C.material_region(slot.material.name)==REGION:return True
-    return False
+    return bool(partition(target,REGION))
 
 
 def build_for(output, settings, expressions, collection=None):
@@ -424,9 +569,10 @@ def build_for(output, settings, expressions, collection=None):
         probes=None
         output['ek_card_warnings']=json.dumps(
             json.loads(output.get('ek_card_warnings','[]'))+[str(exc)],ensure_ascii=False)
+    rims=eye_card_rims(output) if library else {}
     for spec in reference_specs(library,skip=('脸红',)):
         try:
-            cards.append(reference_card(output,spec['entry'],library,texture,collection,probes))
+            cards.append(reference_card(output,spec['entry'],library,texture,collection,probes,rims=rims))
         except ValueError as exc:
             output['ek_card_warnings']=json.dumps(
                 json.loads(output.get('ek_card_warnings','[]'))+[str(exc)],ensure_ascii=False)
@@ -438,6 +584,9 @@ def build_for(output, settings, expressions, collection=None):
         specs=[spec for spec in specs if spec.get('name')!='目影']
     for spec in specs:
         try:
+            if spec['kind']=='SHELL':
+                spec=dict(spec,blush_range=getattr(settings,'blush_range',1.),
+                          blush_blur=getattr(settings,'blush_blur',T.BLUSH_BLUR))
             cards.append(_build_one(output,spec,collection))
         except ValueError as exc:
             # One unusable card must not lose a finished expression set.
@@ -448,7 +597,10 @@ def build_for(output, settings, expressions, collection=None):
         # expression". Reference cards declare exactly their own name, so an
         # unselected card stays hidden at Basis instead of opening with all.
         declared=json.loads(card.get('ek_card_expressions','[]'))
-        if declared:wanted=[name for name in expressions if name in declared]
+        if declared:
+            from .expression_rules import canonical_name
+            declared={canonical_name(name) for name in declared}
+            wanted=[name for name in expressions if canonical_name(name) in declared]
         else:wanted=list(expressions)
         apply_keys(card,shown,wanted)
         card.parent=output
@@ -498,7 +650,7 @@ def embed(output):
     if keys is None or not cards:return 0
     first_v=len(mesh.vertices);first_f=len(mesh.polygons);first_m=len(mesh.materials)
     inverse=np.array(output.matrix_world.inverted(),dtype=float)
-    pieces=[];face_uvs=[]
+    pieces=[];face_uvs=[];cheek_uvs=[]
     for card in cards:
         matrix=inverse@np.array(card.matrix_world,dtype=float)
         def local(points,matrix=matrix):return points@matrix[:3,:3].T+matrix[:3,3]
@@ -506,10 +658,12 @@ def embed(output):
         rest=local(_key_points(shape.reference_key))
         posed={block.name:local(_key_points(block)) for block in shape.key_blocks}
         layer=card.data.uv_layers[0] if card.data.uv_layers else None
+        cheek=card.data.uv_layers.get('EK_cheek_mask')
         faces=[]
         for polygon in card.data.polygons:
             faces.append(list(polygon.vertices))
             face_uvs.append([tuple(layer.data[i].uv) if layer else (0.,0.) for i in polygon.loop_indices])
+            cheek_uvs.append([tuple(cheek.data[i].uv) for i in polygon.loop_indices] if cheek else None)
         pieces.append(dict(card=card,rest=rest,keys=posed,faces=faces,count=len(rest)))
     bm=bmesh.new()
     try:
@@ -531,15 +685,19 @@ def embed(output):
         for piece in pieces:
             points[cursor:cursor+piece['count']]=piece['keys'].get(block.name,piece['rest']);cursor+=piece['count']
         block.data.foreach_set('co',points.ravel().astype(np.float32))
+    added_cheek_uv=False
+    if any(uvs is not None for uvs in cheek_uvs) and mesh.uv_layers.get('EK_cheek_mask') is None:
+        mesh.uv_layers.new(name='EK_cheek_mask');added_cheek_uv=True
     for layer in mesh.uv_layers:
         for offset,uvs in enumerate(face_uvs):
+            if layer.name=='EK_cheek_mask' and cheek_uvs[offset] is not None:uvs=cheek_uvs[offset]
             polygon=mesh.polygons[first_f+offset]
             for loop,uv in zip(polygon.loop_indices,uvs):layer.data[loop].uv=uv
     mesh.update()
     for piece in pieces:
         piece['card'].hide_viewport=True;piece['card'].hide_render=True
     output['ek_card_embedded']=json.dumps(dict(vertices=first_v,faces=first_f,materials=first_m,
-        cards=[piece['card'].name for piece in pieces]),ensure_ascii=False)
+        cards=[piece['card'].name for piece in pieces],added_cheek_uv=added_cheek_uv),ensure_ascii=False)
     return total-first_v
 
 
@@ -557,6 +715,9 @@ def unembed(output):
         bm.to_mesh(mesh)
     finally:bm.free()
     while len(mesh.materials)>info['materials']:mesh.materials.pop(index=len(mesh.materials)-1)
+    if info.get('added_cheek_uv'):
+        layer=mesh.uv_layers.get('EK_cheek_mask')
+        if layer is not None:mesh.uv_layers.remove(layer)
     mesh.update()
     for name in info.get('cards',[]):
         card=bpy.data.objects.get(name)
@@ -589,7 +750,97 @@ def card_probes(target, labels=(0,2,3,5,7)):
     return face_points(target)[sorted(ids)]
 
 
-def clear_posed_face(target, name, posed, faces, width):
+def eye_card_rims(target):
+    """Find the skin copy of each rim, excluding duplicated eye layer vertices."""
+    source=target.get('ek_procedural_partition')
+    origin=target.data.attributes.get('ek_vertex_origin')
+    saved=target.get('ek_card_eye_rim_origins')
+    if saved is not None and origin is not None:
+        rim_origins=json.loads(saved)
+    else:
+        from . import procedural_rig
+        try:
+            info=procedural_rig.analyze(source if source is not None and origin is not None else target)
+        except ValueError:
+            return {}
+        rim_origins={str(side):[vertex for vertex,_,_ in rows]
+                     for (kind,side),rows in info['rows'].items() if kind=='EYE'}
+    origins=[row.value for row in origin.data] if origin is not None and (saved is not None or source is not None) else range(len(target.data.vertices))
+    eye_layers=set(json.loads(target.get('ek_static_eye_vertices','[]')))
+    rims={}
+    for side,vertices in rim_origins.items():
+        vertices=set(vertices)
+        ids=[index for index,original in enumerate(origins) if original in vertices and index not in eye_layers]
+        if len(ids)>=3:rims[side]=ids
+    return rims
+
+
+def fit_eye_card(target, entry, rest, posed, rims, circle_fit):
+    """Fit visible ink to the opening, and follow the final rim's centre."""
+    calibration=entry.get('eye_fit',{})
+    if not calibration or not rims:return False
+    basis=face_points(target)
+    keys=target.data.shape_keys
+    key=keys.key_blocks.get(entry['name']) if keys else None
+    reference=np.asarray(entry['posed'],dtype=float)
+    pupils=[]
+    if entry['name'] in EYE_CARDS+REPLACEMENT_EYES:
+        from .region_core import topology
+        faces=[list(target.data.polygons[i].vertices) for i in partition(target,3)]
+        # Region 3 can include tiny detached highlight islands. Use the
+        # principal iris patch near each rim, without letting highlights set
+        # its centre or size.
+        pupils=[sorted({vertex for i in part['faces'] for vertex in faces[i]})
+                for part in topology(faces)[1]]
+    fitted=False
+    for side,fit in calibration.items():
+        if side not in rims:continue
+        rim=rims[side]
+        neutral=basis[rim]
+        aperture=np.ptp(neutral[:,[0,2]],axis=0)
+        bounds=np.asarray(fit['bounds'],dtype=float)
+        if np.any(aperture<=1e-9) or np.any(np.ptp(bounds,axis=0)<=1e-9):continue
+        anchor=rim
+        opening_centre=(neutral.min(0)+neutral.max(0))*.5
+        pupil_candidates=[]
+        for ids in pupils:
+            cloud=basis[ids][:,[0,2]]
+            span=np.ptp(cloud,axis=0)
+            centre=(cloud.min(0)+cloud.max(0))*.5
+            offset=abs(centre-opening_centre[[0,2]])
+            if np.all((span>0)&(span<=1.25*aperture.max())) and np.all(offset<.5*aperture):
+                # A full iris may extend behind the lids. Fit its decoration
+                # into the visible part while keeping the actual iris centre.
+                visible_span=np.minimum(span,aperture-2.*offset)
+                # An off-centre overlay can have a larger bounding box than
+                # the iris while covering little of the usable opening.
+                pupil_candidates.append((float(np.prod(visible_span)),ids,visible_span,span[0]))
+        size=aperture*np.asarray(fit['fill'])
+        pupil_width=None
+        if pupil_candidates:
+            _,pupil,visible_size,pupil_width=max(pupil_candidates,key=lambda row:row[0])
+            if entry['name'] in EYE_CARDS:anchor,size=pupil,visible_size
+        visible=np.array([tuple(target.matrix_world@key.data[i].co) for i in anchor]) if key else basis[anchor]
+        centre=(visible.min(0)+visible.max(0))*.5
+        indices=np.flatnonzero(reference[:,0]*int(side)>0)
+        scale=float(np.min(size/np.ptp(bounds,axis=0)))
+        if entry['name'] in REPLACEMENT_EYES and side in circle_fit:
+            circle_span=np.ptp(np.asarray(circle_fit[side]['bounds']),axis=0)
+            if pupil_width is not None and circle_span[0]>1e-9:
+                scale=float(pupil_width/circle_span[0])
+            else:
+                scale=float(np.min(aperture/np.maximum(circle_span,1e-9)))
+        if entry['name']=='はちゅ目':
+            centre[0]-=int(side)*aperture[0]*.08
+        relative=reference[indices]
+        source_centre=np.array([bounds[:,0].mean(),relative[:,1].mean(),bounds[:,1].mean()])
+        posed[indices]=centre+(relative-source_centre)*scale
+        rest[indices]=opening_centre+(posed[indices]-centre)*T.COLLAPSE
+        fitted=True
+    return fitted
+
+
+def clear_posed_face(target, name, posed, faces, width, *, legacy_gap=True):
     """Lift the entire card against the actual expression's facial triangles."""
     keys=target.data.shape_keys
     key=keys.key_blocks.get(name) if keys else None
@@ -616,12 +867,12 @@ def clear_posed_face(target, name, posed, faces, width):
         if hit is not None:shift=max(shift,float(point[1]-hit.y)+margin)
     # Replacement eyes need a small extra gap for the curved card surface
     # and views slightly above the facial front direction.
-    if name in ("はぅ","はちゅ目"):shift+=width*.02
+    if legacy_gap and name in REPLACEMENT_EYES:shift+=width*.02
     result=posed.copy();result[:,1]-=shift
     return result
 
 
-def reference_card(target, entry, library, texture, collection=None, probes=None):
+def reference_card(target, entry, library, texture, collection=None, probes=None, *, rims=None):
     """Rebuild one card captured from the reference model.
 
     The library stores rest/posed corners relative to the reference head
@@ -646,6 +897,8 @@ def reference_card(target, entry, library, texture, collection=None, probes=None
 
     rest=place(entry['rest'])
     posed=place(entry['posed'])
+    circle_fit=next((card.get('eye_fit',{}) for card in (library or {}).get('cards',[]) if card['name']=='はちゅ目'),{})
+    fitted=fit_eye_card(target,entry,rest,posed,eye_card_rims(target) if rims is None and entry.get('eye_fit') else rims,circle_fit)
     if probes is None:probes=card_probes(target)
     if entry['name'] in EYE_CARDS:
         # Inside the eye a card only has to clear the pupil and eye white;
@@ -657,14 +910,15 @@ def reference_card(target, entry, library, texture, collection=None, probes=None
         # still be cleared; lashes and brows may cover it.
         try:probes=card_probes(target,SKIN_EYE_LABELS)
         except ValueError:pass
-    posed=Depth.push_front(posed,probes,margin=T.CLEARANCE,scale=width)
+    if not (fitted and entry['name'] in REPLACEMENT_EYES):
+        posed=Depth.push_front(posed,probes,margin=T.CLEARANCE,scale=width)
     # The hidden state must stay behind the same surface it was hidden by.
     rest=Depth.push_behind(rest,probes,margin=T.MARGIN*.5,scale=width)
     faces=[tuple(loop['index'] for loop in face) for face in entry['faces']]
     uvs=[np.array([loop['uv'] for loop in face],dtype=float) for face in entry['faces']]
     if not faces:raise ValueError('参考卡片缺少面：'+entry['name'])
     name=entry['name']
-    posed=clear_posed_face(target,name,posed,faces,width)
+    posed=clear_posed_face(target,name,posed,faces,width,legacy_gap=not fitted)
     card=_object('EK_card_'+name,rest,faces,
                  _material('EK_card_'+name,texture,tuple(entry.get('tint',(1,1,1,1)))),collection)
     layer=card.data.uv_layers.new(name='UVMap')

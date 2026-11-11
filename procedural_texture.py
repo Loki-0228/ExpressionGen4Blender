@@ -17,6 +17,7 @@ CLEARANCE=.010        # card offset in eye-width units
 MARGIN=.010           # how far behind the face front a hidden card sits
 COLLAPSE=.03          # hidden cards keep 3% of their span
 SHELL_OFFSET=.004
+BLUSH_BLUR=.7
 
 
 def _unit(vector, fallback):

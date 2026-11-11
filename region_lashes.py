@@ -13,6 +13,17 @@ def upper_band_vertices(points,polygons,parts,plane,ring,side):
     """
     faces=[f for f in polygons if all(parts[i]==1 for i in f)
            and (1 if np.mean([points[i][0] for i in f])>=plane else -1)==side]
+    # UV seams split one physical ribbon into several indexed islands. Work
+    # on coincident edge aliases so a lower return is not absorbed by an
+    # upper-only fragment. Keep the original mesh and IDs for the guides.
+    from mathutils.kdtree import KDTree
+    ids=sorted({i for face in faces for i in face})
+    if not ids:return set()
+    tree=KDTree(len(ids))
+    for i in ids:tree.insert(Vector(points[i]),i)
+    tree.balance();tolerance=max(ring.frame.width*1e-6,1e-12)
+    aliases={i:min(j for _,j,_ in tree.find_range(Vector(points[i]),tolerance)) for i in ids}
+    faces=[[aliases[i] for i in face] for face in faces]
     import heapq
     result=set();left=min(p.x for p in ring.points);right=max(p.x for p in ring.points)
     for island in C.topology(faces)[1]:
@@ -32,8 +43,16 @@ def upper_band_vertices(points,polygons,parts,plane,ring,side):
         if seeds[False] and not seeds[True]:continue
         if not seeds[True]:
             result.update(i for i in ids if ring.locate(Vector(points[i]))[1]);continue
-        # A full eye loop can have a very thick upper band and a thin lower
-        # band. Area/vertex majority must not absorb the lower outer segment.
+        # Once both branches are established, their near-rim roots also seed
+        # the canthus. Distance from central seeds alone moves the split down
+        # a long vertical corner, assigning real lower roots to the upper lid.
+        for i in ids:
+            point=Vector(points[i])
+            distances={upper:(point-ring.sample(ring.locate(point,upper)[0],upper)).length for upper in (True,False)}
+            difference=distances[False]-distances[True]
+            if min(distances.values())<ring.frame.width*.08 and abs(difference)>ring.frame.height*.08:
+                seeds[True].discard(i);seeds[False].discard(i)
+                seeds[difference>0].add(i)
         distances={}
         for upper in (True,False):
             distance={i:0. for i in seeds[upper]};queue=[(0.,i) for i in seeds[upper]];heapq.heapify(queue)
@@ -45,7 +64,7 @@ def upper_band_vertices(points,polygons,parts,plane,ring,side):
                     if candidate<distance.get(j,float('inf')):distance[j]=candidate;heapq.heappush(queue,(candidate,j))
             distances[upper]=distance
         result.update(i for i in ids if distances[True].get(i,float('inf'))<=distances[False].get(i,float('inf')))
-    return result
+    return {i for i,alias in aliases.items() if alias in result}
 
 
 def describe(points, ids, ring, side, connected=False):

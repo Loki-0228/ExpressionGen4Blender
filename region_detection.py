@@ -205,15 +205,15 @@ def infer_regions(points,polygons,material_labels):
     labels[face['faces']]=[int(labels[f]) if labels[f]>=0 else 0 for f in face['faces']]
     for row in rows:
         if row is not face and row['hint']==0:labels[row['faces']]=-1
+    protected={7,8,9,12,13}
     def assign(row,label):
-        # A mixed connected component must not erase an explicit eye-white
-        # face just because its majority is an iris or an accessory strip.
-        labels[row['faces']]=[7 if material_labels[f]==7 else label for f in row['faces']]
+        # Keep authored oral parts and eye overlays on mixed components.
+        labels[row['faces']]=[material_labels[f] if material_labels[f] in protected else label for f in row['faces']]
         used.add(id(row))
     candidates=[]
     for row in rows:
         if row is face:continue
-        if row['hint_ratio']>=.8 and row['hint'] in (2,7,8,9,12):continue
+        if row['hint_ratio']>=.8 and row['hint'] in (2,7,8,9,12,13):continue
         x,y,z=row['size'];center=row['center'];level=(center[2]-face['low'][2])/height
         if (len(row['faces'])>=10 and width*.065<x<width*.48 and height*.055<z<height*.40
                 and .3<x/max(z,1e-12)<2.8 and width*.04<abs(center[0]-plane)<width*.48
@@ -244,6 +244,7 @@ def infer_regions(points,polygons,material_labels):
     for row in rows:
         if id(row) in used:continue
         if row['hint_ratio']>=.8 and row['hint'] in (2,3,7):assign(row,row['hint']);continue
+        if row['hint'] in (8,9,12,13):continue
         side=1 if row['center'][0]>=plane else -1;eye=eyes.get(side)
         if eye is None:continue
         extent=np.maximum(eye['size'],width*.005);relative=(row['center']-eye['center'])/extent
@@ -257,7 +258,7 @@ def infer_regions(points,polygons,material_labels):
     coordinates=np.asarray(points,dtype=float)
     strips=[row for row in rows if id(row) in used and np.all(labels[row['faces']]==2)]
     for row in rows:
-        if id(row) in used or row['hint'] in (3,7,8,9,12):continue
+        if id(row) in used or row['hint'] in (3,7,8,9,12,13):continue
         eye=eyes.get(1 if row['center'][0]>=plane else -1)
         if eye is None or max(row['size'])>max(eye['size'])*.65:continue
         cloud=coordinates[row['ids']];singular=np.linalg.svd(cloud-cloud.mean(0),compute_uv=False)
@@ -268,7 +269,7 @@ def infer_regions(points,polygons,material_labels):
     # Resolve small eye patches only after root-connected lash spikes. A
     # highlight is part of Eyes throughout detection, never a temporary Gaze.
     for row in rows:
-        if id(row) in used:continue
+        if id(row) in used or row['hint'] in (8,9,12,13):continue
         eye=eyes.get(1 if row['center'][0]>=plane else -1)
         if eye is None:continue
         extent=np.maximum(eye['size'],width*.005);relative=(row['center']-eye['center'])/extent

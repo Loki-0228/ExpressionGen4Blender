@@ -51,7 +51,7 @@ def exact_material_region(name):
     names['mouth/tongue'] = 8
     names['gaze'] = 3
     names.update({'面部':0,'眉睫':2,'眉毛':2,'睫毛':2,'眼睛':3,'左眼':3,'右眼':3,
-                  '高光':3,'瞳孔与高光':3,'呆滞眼':7,'口腔':8,'牙齿':9,'舌头':12,
+                  '高光':3,'瞳孔与高光':3,'呆滞眼':7,'口腔':8,'牙齿':9,'上牙':9,'下牙':9,'舌头':12,
                   '目影':13,'眼影':13,'アイシャドウ':13,'アイシャドー':13})
     return names.get(name.casefold())
 
@@ -65,7 +65,7 @@ _ENGLISH_REGION_PATTERNS={
     5:r'gaze|high\s*lights?|catch\s*lights?',
     7:r'blank\s*stare|eye\s*whites?|sclera',
     8:r'mouth|oral',
-    9:r'teeth|tooth|dental',
+    9:r'teeth|tooth|dental|gums?',
     12:r'tongue',
     13:r'eye\s*shadows?|eyeshadow',
 }
@@ -78,7 +78,7 @@ _CJK_REGION_KEYWORDS={
     5:('眼高光','高光','ハイライト'),
     7:('呆滞眼','呆滯眼','眼白','白目'),
     8:('口腔','口内','口內','嘴内','嘴內'),
-    9:('牙齿','牙齒','牙龈','牙齦'),
+    9:('牙齿','牙齒','牙龈','牙齦','歯列','歯茎','上歯','下歯','上の歯','下の歯','上顎歯','下顎歯','歯材質','牙材质','牙材質'),
     12:('舌头','舌頭','ベロ','べろ'),
     13:('目影','眼影','アイシャドウ','アイシャドー'),
 }
@@ -120,6 +120,16 @@ def _material_region(name):
 
 def material_region(name):
     return canonical_region(_material_region(name))
+
+
+def dental_group(name):
+    """Recognize authored upper/lower teeth even in a connected dental mesh."""
+    if material_region(name)!=9:return 0
+    name=unicodedata.normalize('NFKC',name)
+    words=re.sub(r'([a-z])([A-Z])',r'\1 \2',name).casefold()
+    upper=bool(re.search(r'(?<![a-z])upper(?![a-z])|上(?:の|顎|颌)?[歯牙]',words))
+    lower=bool(re.search(r'(?<![a-z])lower(?![a-z])|下(?:の|顎|颌)?[歯牙]',words))
+    return int(upper)-int(lower)
 
 OUTSIDE = -1
 UNCERTAIN = -2

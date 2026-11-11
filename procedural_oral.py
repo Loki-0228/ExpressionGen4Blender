@@ -225,6 +225,22 @@ def apply(target,result):
                 key.data.foreach_set('co',(committed_basis+residual[full_origins]).ravel())
             for index,co in zip(result_indices,coords):key.data[index].co=co
             key.relative_key=basis;key.slider_min=minimum;key.slider_max=maximum;key.value=0;key.mute=False;key.vertex_group=''
+        if result.get('ek_topology_transfer') and old.shape_keys:
+            # Preserve the relative offsets of untouched keys even when their
+            # parent was replaced by this batch.
+            changed={name for name,_,_,_ in incoming[1:]}
+            children={}
+            for previous in old.shape_keys.key_blocks[1:]:
+                if previous.name not in changed and previous.relative_key!=previous:
+                    children.setdefault(previous.relative_key.name,[]).append(previous)
+            pending=list(changed)
+            while pending:
+                parent=pending.pop()
+                for child in children.get(parent,[]):
+                    parent_points=Commit.coordinates(new_key.key_blocks[parent].data)
+                    offset=Commit.coordinates(child.data)-Commit.coordinates(child.relative_key.data)
+                    new_key.key_blocks[child.name].data.foreach_set('co',(parent_points+offset[full_origins]).ravel())
+                    pending.append(child.name)
         # The full original mesh already carries original materials, UVs and
         # body weights. Only copy generated jaw groups into its vertex range.
         oral_names={'EK_oral_'+name for name in json.loads(result.get('ek_oral_bone_groups','{}')).values()}
@@ -281,7 +297,7 @@ def apply(target,result):
             # and its modifier exactly as they were; only its Key references
             # must follow the staged mesh. rebuild_drivers() is deliberately
             # not called here because it would clear unknown drivers.
-            rebound=retarget_drivers(previous_arm,old.shape_keys,new_key)
+            rebound+=retarget_drivers(previous_arm,old.shape_keys,new_key)
             rebound+=retarget_drivers(previous_arm.data,old.shape_keys,new_key)
         else:
             for name in ('ek_oral_armature','ek_oral_poses'):
@@ -290,6 +306,12 @@ def apply(target,result):
             for old_mod in list(target.modifiers):
                 if old_mod!=mod and old_mod.type=='ARMATURE' and old_mod.object and old_mod.object.get('ek_oral_owner')==target:
                     target.modifiers.remove(old_mod)
+        if result.get('ek_topology_transfer'):
+            rebound+=retarget_drivers(target,old.shape_keys,new_key)
+            for child in target.children:
+                if child.get('ek_committed_rigid') or child.get('ek_material_expression'):
+                    rebound+=retarget_drivers(child,old.shape_keys,new_key)
+                    rebound+=retarget_drivers(child.data.shape_keys if child.type=='MESH' else child.data,old.shape_keys,new_key)
         partition=result.get('ek_procedural_partition')
         if partition:
             from . import region_guides as G
